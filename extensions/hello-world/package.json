@@ -1,0 +1,7 @@
+{
+  "name": "hello-world",
+  "version": "0.0.1",
+  "description": "Example Pi extension demonstrating tools, commands, and event hooks",
+  "type": "module",
+  "main": "index.ts"
+}
