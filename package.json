@@ -1,0 +1,51 @@
+{
+  "name": "santychuy-pi-setup",
+  "version": "0.1.0",
+  "description": "My personal Pi coding agent setup — extensions, skills, themes, and prompts",
+  "keywords": [
+    "pi-harness",
+    "pi-package",
+    "pi-setup"
+  ],
+  "homepage": "https://github.com/santychuy/pi-setup#readme",
+  "bugs": {
+    "url": "https://github.com/santychuy/pi-setup/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/santychuy/pi-setup.git"
+  },
+  "scripts": {
+    "lint": "oxlint",
+    "format": "oxfmt --write .",
+    "check": "oxlint && oxfmt --check . && tsc --noEmit",
+    "install:local": "bun scripts/install-local.ts",
+    "link:local": "bun scripts/link-local.ts"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "0.73.0",
+    "oxfmt": "0.48.0",
+    "oxlint": "1.63.0",
+    "typebox": "1.1.38",
+    "typescript": "5.8.3"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./prompts"
+    ],
+    "themes": [
+      "./themes"
+    ]
+  }
+}
