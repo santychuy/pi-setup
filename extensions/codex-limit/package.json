@@ -1,0 +1,7 @@
+{
+  "name": "codex-limit",
+  "version": "0.0.1",
+  "description": "Codex subscription usage footer widget for Pi",
+  "type": "module",
+  "main": "index.ts"
+}

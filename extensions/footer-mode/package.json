@@ -1,0 +1,7 @@
+{
+  "name": "footer-mode",
+  "version": "0.0.1",
+  "description": "Zen/dev footer mode extension for Pi",
+  "type": "module",
+  "main": "index.ts"
+}

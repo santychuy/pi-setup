@@ -3,7 +3,7 @@
 This is a personal Pi coding agent setup repository. It is structured as an installable pi-package for portability across machines and sharing with others.
 
 Use bun as package manager, instead of npm.
-Every new package to install should be using the `-E` flag for installing the exact version.
+Every new package to install should be using the `-E` flag for installing the exact version, without declaring the fixed version.
 
 ## How Pi Discovers This Repo
 
