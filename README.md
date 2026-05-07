@@ -91,7 +91,7 @@ extensions/my-extension/
 2. In `index.ts`, export a default function that receives `ExtensionAPI`:
 
 ```ts
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({ ... });

@@ -37,13 +37,13 @@ Check the source code of the package to analyze the documentation available.
 
 - Each extension is a directory under `extensions/` with an `index.ts` entry point
 - Extensions export a default function receiving `ExtensionAPI`
-- Extensions use `@mariozechner/pi-coding-agent` for types (devDependency)
+- Extensions use `@earendil-works/pi-coding-agent` for types (devDependency)
 - Pi loads extensions via `jiti` — no build step needed, TypeScript works directly
 
 ### Extension Template
 
 ```ts
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 export default function (pi: ExtensionAPI) {
