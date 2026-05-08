@@ -1,7 +1,41 @@
 {
-  "name": "footer-mode",
+  "name": "pi-footer-mode",
   "version": "0.0.1",
   "description": "Zen/dev footer mode extension for Pi",
+  "keywords": [
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-package"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/santychuy/pi-setup.git",
+    "directory": "extensions/footer-mode"
+  },
+  "files": [
+    "index.ts",
+    "package.json",
+    "README.md"
+  ],
   "type": "module",
-  "main": "index.ts"
+  "main": "index.ts",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.74.0",
+    "@earendil-works/pi-tui": "0.74.0",
+    "typescript": "5.8.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
 }
