@@ -1,5 +1,5 @@
 import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
   CustomEditor,
   type ExtensionAPI,
@@ -128,6 +128,64 @@ function isOpenAICodexProvider(provider: string | undefined): boolean {
   return /^openai-codex(-\d+)?$/.test(provider ?? "");
 }
 
+function formatCompactTokens(count: number): string {
+  const abs = Math.abs(count);
+  if (abs >= 1_000_000) return `${Number((count / 1_000_000).toFixed(1))}m`;
+  if (abs >= 1_000) return `${Number((count / 1_000).toFixed(1))}k`;
+  return `${Math.round(count)}`;
+}
+
+function formatEstimatedCost(cost: number): string {
+  if (cost >= 10) return `$${cost.toFixed(1)}`;
+  if (cost >= 1) return `$${cost.toFixed(2)}`;
+  return `$${cost.toFixed(2)}`;
+}
+
+function formatSessionTokenTotals(
+  ctx: ExtensionContext,
+  colorToken: (text: string) => string,
+): string {
+  let input = 0;
+  let output = 0;
+  let cost = 0;
+
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+    input += entry.message.usage?.input ?? 0;
+    output += entry.message.usage?.output ?? 0;
+    cost += entry.message.usage?.cost?.total ?? 0;
+  }
+
+  return colorToken(
+    `↑${formatCompactTokens(input)} ↓${formatCompactTokens(output)}  ${formatEstimatedCost(cost)}`,
+  );
+}
+
+/** Compact braille-style bar showing the context window percentage already filled. */
+function formatContextBar(
+  ctx: ExtensionContext,
+  modelConfig: ExtensionContext["model"],
+  colorToken: (text: string) => string,
+  colorBar: (percentUsed: number, text: string) => string,
+): string {
+  const usage = ctx.getContextUsage();
+  const contextWindow = usage?.contextWindow ?? modelConfig?.contextWindow ?? 0;
+  const usedTokens = usage?.tokens ?? 0;
+  const usedPercent =
+    usage?.percent ?? (contextWindow > 0 ? (usedTokens / contextWindow) * 100 : null);
+  const tokenTotals = formatSessionTokenTotals(ctx, colorToken);
+  const tokenLabel = `${formatCompactTokens(usedTokens)}/${formatCompactTokens(contextWindow)}`;
+  const prefix = tokenTotals + colorToken(" · ") + colorToken(tokenLabel) + colorToken(" · ");
+
+  if (usedPercent === null) return prefix + colorToken("[??????????] ?%");
+
+  const percentUsed = Math.max(0, Math.min(100, usedPercent));
+  const totalCells = 10;
+  const filledCells = Math.round((percentUsed / 100) * totalCells);
+  const bar = `${"⣿".repeat(filledCells)}${"⣀".repeat(totalCells - filledCells)}`;
+  return prefix + colorBar(percentUsed, `[${bar}] ${Math.round(percentUsed)}%`);
+}
+
 /** Build the right-side model/footer payload from Pi model state and optional Codex quota globals. */
 function formatModelInfo(
   pi: ExtensionAPI,
@@ -219,6 +277,8 @@ export default function (pi: ExtensionAPI) {
 
     ctx.ui.setWorkingVisible(mode === "dev");
 
+    ctx.ui.setWidget("footer-mode-context-bar", undefined);
+
     if (mode === "zen") {
       ctx.ui.setWidget("footer-mode-dev-info", undefined);
       ctx.ui.setWidget("footer-mode-model-info", undefined);
@@ -262,16 +322,28 @@ export default function (pi: ExtensionAPI) {
                     ? theme.fg("dim", " · resets in ") +
                       theme.fg("error", formatResetShort(info.usage?.resetAt))
                     : theme.fg("dim", " · ") +
-                      (usagePercent >= 90
+                      (usagePercent >= 80
                         ? theme.fg("error", `${Math.round(usagePercent)}%`)
-                        : usagePercent >= 70
+                        : usagePercent >= 50
                           ? theme.fg("warning", `${Math.round(usagePercent)}%`)
-                          : theme.fg("success", `${Math.round(usagePercent)}%`));
+                          : theme.fg("muted", `${Math.round(usagePercent)}%`));
               const thinking = info.thinking
                 ? theme.fg("dim", " · ") +
                   theme.getThinkingBorderColor(info.thinking)(info.thinking)
                 : "";
-              return [truncateToWidth(provider + slash + model + usage + thinking, width)];
+              const left = provider + slash + model + usage + thinking;
+              const contextBar = formatContextBar(
+                ctx,
+                currentModel,
+                (text) => theme.fg("dim", text),
+                (percentUsed, text) => {
+                  if (percentUsed >= 90) return theme.fg("error", text);
+                  if (percentUsed >= 70) return theme.fg("warning", text);
+                  return theme.fg("accent", text);
+                },
+              );
+              const gap = Math.max(1, width - visibleWidth(left) - visibleWidth(contextBar));
+              return [truncateToWidth(left + " ".repeat(gap) + contextBar, width)];
             },
           };
         },
@@ -312,8 +384,13 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", requestRender);
+  pi.on("message_update", requestRender);
+  pi.on("message_end", requestRender);
   pi.on("agent_end", refreshGitInfoIfVisible);
-  pi.on("turn_end", refreshGitInfoIfVisible);
+  pi.on("turn_end", () => {
+    requestRender();
+    refreshGitInfoIfVisible();
+  });
   pi.on("model_select", (event) => {
     currentModel = event.model;
     requestRender();
