@@ -1,7 +1,8 @@
 <div align="left">
-  <img src="https://raw.githubusercontent.com/santychuy/pi-setup/main/.github/assets/santychuyISO.png" alt="santychuyISO" width="60" style="vertical-align: middle; margin-right: 12px;" />
-  <span style="vertical-align: middle; font-size: 1.8em; font-weight: bold;">pi-footer-mode</span>
+  <img src="https://raw.githubusercontent.com/santychuy/pi-setup/main/.github/assets/santychuyISO.png" alt="santychuyISO" width="120" style="vertical-align: middle; margin-bottom: 16px;" />
 </div>
+
+# pi-footer-mode
 
 Zen/dev footer mode extension for Pi. Toggle between a clean "zen" footer and a "dev" footer showing git branch, working directory, model info, thinking level, and Codex usage.
 
