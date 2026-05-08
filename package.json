@@ -62,7 +62,7 @@
     ]
   },
   "workspaceRelease": {
-    "npmRelease": false,
+    "changelogCommit": false,
     "perPackageConfig": {
       "santychuy-pi-setup": {
         "skip": true
