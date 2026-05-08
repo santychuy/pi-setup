@@ -22,6 +22,24 @@ Writes to `.pi/settings.json` — portable across teams:
 pi install -l npm:pi-codex-limit
 ```
 
+## Visual Demo
+
+### Default Footer
+
+<img src="https://raw.githubusercontent.com/santychuy/pi-setup/main/.github/assets/codex-default-footer.png" alt="Default footer" width="600" />
+
+### Custom Footer (with pi-footer-mode)
+
+The [custom footer](https://github.com/santychuy/pi-setup/tree/main/extensions/footer-mode) adds a minimal usage percentage showing your 5-hour window consumption, giving you instant visibility into remaining quota:
+
+<img src="https://raw.githubusercontent.com/santychuy/pi-setup/main/.github/assets/codex-custom-footer.png" alt="Custom footer" width="600" />
+
+### `/codex-limit` Command
+
+Running `/codex-limit` opens an interactive dashboard with usage statistics and a shortcut.
+
+<img src="https://raw.githubusercontent.com/santychuy/pi-setup/main/.github/assets/codex-command-usage.png" alt="Codex-limit command" width="600" />
+
 ## Features
 
 - Footer widget showing 5-hour usage percentage when using openai-codex models

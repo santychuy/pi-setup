@@ -94,15 +94,15 @@ function isOpenAICodexProvider(provider: string | undefined): boolean {
 
 function formatModelInfo(
   pi: ExtensionAPI,
-  ctx: ExtensionContext,
+  modelConfig: ExtensionContext["model"],
 ): {
   provider: string;
   model: string;
   thinking?: PiThinkingLevel;
   usage?: CodexLimitUsage["fiveHour"];
 } {
-  const provider = ctx.model?.provider ?? "no-provider";
-  const model = ctx.model?.id ?? "no-model";
+  const provider = modelConfig?.provider ?? "no-provider";
+  const model = modelConfig?.id ?? "no-model";
   const thinking = pi.getThinkingLevel() as PiThinkingLevel;
   const codexLimit = globalThis.piCodexLimit;
   return {
@@ -119,6 +119,7 @@ function formatModelInfo(
 export default function (pi: ExtensionAPI) {
   let mode: FooterMode = "zen";
   let activeTui: TUI | undefined;
+  let currentModel: ExtensionContext["model"];
   let gitBranch: string | undefined;
 
   const rememberMode = () => {
@@ -180,7 +181,7 @@ export default function (pi: ExtensionAPI) {
           return {
             invalidate() {},
             render(width: number): string[] {
-              const info = formatModelInfo(pi, ctx);
+              const info = formatModelInfo(pi, currentModel);
               const provider = theme.fg("dim", info.provider);
               const slash = theme.fg("dim", "/");
               const model = theme.fg("muted", info.model);
@@ -223,6 +224,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     mode = "zen";
+    currentModel = ctx.model;
     installStableEditor(ctx);
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type !== "custom" || entry.customType !== STATE_TYPE) continue;
@@ -234,13 +236,17 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", () => {
     activeTui = undefined;
+    currentModel = undefined;
     gitBranch = undefined;
   });
 
   pi.on("agent_start", requestRender);
   pi.on("agent_end", requestRender);
   pi.on("turn_end", requestRender);
-  pi.on("model_select", requestRender);
+  pi.on("model_select", (event) => {
+    currentModel = event.model;
+    requestRender();
+  });
   pi.on("thinking_level_select", requestRender);
 
   pi.registerShortcut(SHORTCUT, {

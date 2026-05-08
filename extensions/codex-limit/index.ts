@@ -18,6 +18,7 @@ const CODEX_ACCOUNT_ID_CLAIM = "https://api.openai.com/auth.chatgpt_account_id";
 const FIVE_HOUR_SECONDS = 5 * 60 * 60;
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
 const WIDGET_KEY = "codex-limit-render-hook";
+const STATUS_KEY = "codex-limit-usage";
 const GLOBAL_USAGE_KEY = "piCodexLimit";
 
 /** A normalized rate-limit window from Codex's usage endpoint. */
@@ -201,6 +202,26 @@ function publishSnapshot(ctx: ExtensionContext, snapshot: UsageSnapshot | undefi
     : undefined;
 }
 
+/** Update pi's built-in footer status so users without a custom footer still see usage. */
+function publishFooterStatus(ctx: ExtensionContext, snapshot: UsageSnapshot | undefined) {
+  if (!ctx.hasUI) return;
+
+  if (!isOpenAICodexProvider(ctx.model?.provider)) {
+    ctx.ui.setStatus(STATUS_KEY, undefined);
+    return;
+  }
+
+  const used = clampPercent(snapshot?.fiveHour?.usedPercent);
+  if (used === undefined) {
+    ctx.ui.setStatus(STATUS_KEY, undefined);
+    return;
+  }
+
+  const label = `Codex usage limit: ${Math.round(used)}%`;
+  const color = used >= 90 ? "error" : used >= 70 ? "warning" : "success";
+  ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg(color, label));
+}
+
 /**
  * Fetch and cache the current Codex usage snapshot.
  *
@@ -212,6 +233,7 @@ async function updateUsage(ctx: ExtensionContext): Promise<UsageSnapshot | undef
   if (!model || !isOpenAICodexProvider(model.provider) || !ctx.modelRegistry.isUsingOAuth(model)) {
     usageSnapshot = undefined;
     publishSnapshot(ctx, undefined);
+    publishFooterStatus(ctx, undefined);
     requestRender();
     return undefined;
   }
@@ -220,6 +242,7 @@ async function updateUsage(ctx: ExtensionContext): Promise<UsageSnapshot | undef
   if (!auth.ok || !auth.apiKey) {
     usageSnapshot = undefined;
     publishSnapshot(ctx, undefined);
+    publishFooterStatus(ctx, undefined);
     requestRender();
     return undefined;
   }
@@ -237,6 +260,7 @@ async function updateUsage(ctx: ExtensionContext): Promise<UsageSnapshot | undef
     if (!response.ok) {
       usageSnapshot = undefined;
       publishSnapshot(ctx, undefined);
+      publishFooterStatus(ctx, undefined);
       requestRender();
       return undefined;
     }
@@ -248,11 +272,13 @@ async function updateUsage(ctx: ExtensionContext): Promise<UsageSnapshot | undef
       planType: snapshot.planType ?? metadata.planType,
     };
     publishSnapshot(ctx, usageSnapshot);
+    publishFooterStatus(ctx, usageSnapshot);
     requestRender();
     return usageSnapshot;
   } catch {
     usageSnapshot = undefined;
     publishSnapshot(ctx, undefined);
+    publishFooterStatus(ctx, undefined);
     requestRender();
     return undefined;
   }
