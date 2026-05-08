@@ -38,6 +38,7 @@ declare global {
 
 const STATE_TYPE = "footer-mode-state";
 const SHORTCUT = "alt+f";
+const TURN_DURATION_UPDATE_INTERVAL_MS = 250;
 
 /** Hides Pi's default footer while keeping the custom below-editor widgets active. */
 class EmptyFooter implements Component {
@@ -122,6 +123,18 @@ function formatResetShort(resetAt: number | undefined): string {
   if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return `${hours}h ${mins}m`;
   return `${mins}m`;
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
 }
 
 function isOpenAICodexProvider(provider: string | undefined): boolean {
@@ -217,6 +230,9 @@ export default function (pi: ExtensionAPI) {
   let currentCtx: ExtensionContext | undefined;
   let currentModel: ExtensionContext["model"];
   let gitInfo: GitInfo = { changedFiles: 0, isRepo: false };
+  let turnStartedAt: number | undefined;
+  let turnDurationTimer: ReturnType<typeof setInterval> | undefined;
+  let lastTurnDuration: number | undefined;
 
   const rememberMode = () => {
     pi.appendEntry(STATE_TYPE, { mode });
@@ -224,6 +240,48 @@ export default function (pi: ExtensionAPI) {
 
   const requestRender = () => {
     activeTui?.requestRender();
+  };
+
+  const clearTurnDurationTimer = () => {
+    if (!turnDurationTimer) return;
+    clearInterval(turnDurationTimer);
+    turnDurationTimer = undefined;
+  };
+
+  const renderTurnDuration = () => {
+    const elapsed = turnStartedAt ? Date.now() - turnStartedAt : lastTurnDuration;
+    return elapsed === undefined ? "" : formatDuration(elapsed);
+  };
+
+  const updateTurnDurationDisplay = (ctx: ExtensionContext) => {
+    if (!ctx.hasUI) return;
+
+    ctx.ui.setWorkingVisible(true);
+    ctx.ui.setWorkingMessage(renderTurnDuration());
+  };
+
+  const startTurnDuration = (ctx: ExtensionContext) => {
+    clearTurnDurationTimer();
+    turnStartedAt = Date.now();
+    lastTurnDuration = undefined;
+    requestRender();
+    updateTurnDurationDisplay(ctx);
+
+    turnDurationTimer = setInterval(() => {
+      updateTurnDurationDisplay(ctx);
+    }, TURN_DURATION_UPDATE_INTERVAL_MS);
+  };
+
+  const stopTurnDuration = (ctx: ExtensionContext) => {
+    if (turnStartedAt === undefined) return;
+
+    lastTurnDuration = Date.now() - turnStartedAt;
+    turnStartedAt = undefined;
+    clearTurnDurationTimer();
+
+    ctx.ui.setWorkingMessage();
+    updateTurnDurationDisplay(ctx);
+    requestRender();
   };
 
   /** Replace the editor with a border-stable wrapper once a TUI is available. */
@@ -311,6 +369,9 @@ export default function (pi: ExtensionAPI) {
             invalidate() {},
             render(width: number): string[] {
               const info = formatModelInfo(pi, currentModel);
+              const duration = lastTurnDuration
+                ? theme.fg("dim", `took ${formatDuration(lastTurnDuration)} · `)
+                : "";
               const provider = theme.fg("dim", info.provider);
               const slash = theme.fg("dim", "/");
               const model = theme.fg("muted", info.model);
@@ -331,7 +392,7 @@ export default function (pi: ExtensionAPI) {
                 ? theme.fg("dim", " · ") +
                   theme.getThinkingBorderColor(info.thinking)(info.thinking)
                 : "";
-              const left = provider + slash + model + usage + thinking;
+              const left = duration + provider + slash + model + usage + thinking;
               const contextBar = formatContextBar(
                 ctx,
                 currentModel,
@@ -376,17 +437,27 @@ export default function (pi: ExtensionAPI) {
     applyMode(ctx);
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", (_event, ctx) => {
+    clearTurnDurationTimer();
+    ctx.ui.setWorkingMessage();
+    turnStartedAt = undefined;
     activeTui = undefined;
     currentCtx = undefined;
     currentModel = undefined;
     gitInfo = { changedFiles: 0, isRepo: false };
   });
 
+  pi.on("input", (_event, ctx) => {
+    startTurnDuration(ctx);
+  });
+
   pi.on("agent_start", requestRender);
   pi.on("message_update", requestRender);
   pi.on("message_end", requestRender);
-  pi.on("agent_end", refreshGitInfoIfVisible);
+  pi.on("agent_end", (_event, ctx) => {
+    stopTurnDuration(ctx);
+    refreshGitInfoIfVisible();
+  });
   pi.on("turn_end", () => {
     requestRender();
     refreshGitInfoIfVisible();
