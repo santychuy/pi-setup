@@ -12,3 +12,8 @@ pi install npm:pi-codex-limit
 
 - Footer widget showing 5-hour usage percentage when using openai-codex models
 - `/codex-limit` command — interactive view with plan type, masked email, per-window usage, and a shortcut to open the Codex dashboard
+
+## Links
+
+- [Source](https://github.com/santychuy/pi-setup/tree/main/extensions/codex-limit)
+- [Issues](https://github.com/santychuy/pi-setup/issues)

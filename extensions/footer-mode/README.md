@@ -14,3 +14,8 @@ pi install npm:pi-footer-mode
 - `alt+f` shortcut to toggle
 - Dev mode shows: git branch, cwd, model provider/id, thinking level, Codex 5-hour usage
 - Stabilizes editor borders with theme-aware colors
+
+## Links
+
+- [Source](https://github.com/santychuy/pi-setup/tree/main/extensions/footer-mode)
+- [Issues](https://github.com/santychuy/pi-setup/issues)

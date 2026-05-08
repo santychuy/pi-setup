@@ -7,6 +7,10 @@
     "pi-extension",
     "pi-package"
   ],
+  "homepage": "https://github.com/santychuy/pi-setup/tree/main/extensions/codex-limit",
+  "bugs": {
+    "url": "https://github.com/santychuy/pi-setup/issues"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
