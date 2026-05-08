@@ -24,6 +24,13 @@ type CodexLimitUsage = {
   fetchedAt?: number;
 };
 
+/** Snapshot of the repository state shown in the dev footer. */
+type GitInfo = {
+  branch?: string;
+  changedFiles: number;
+  isRepo: boolean;
+};
+
 declare global {
   // eslint-disable-next-line no-var
   var piCodexLimit: CodexLimitUsage | undefined;
@@ -32,6 +39,7 @@ declare global {
 const STATE_TYPE = "footer-mode-state";
 const SHORTCUT = "alt+f";
 
+/** Hides Pi's default footer while keeping the custom below-editor widgets active. */
 class EmptyFooter implements Component {
   render(): string[] {
     return [];
@@ -40,18 +48,44 @@ class EmptyFooter implements Component {
   invalidate(): void {}
 }
 
-class StableBorderEditor extends CustomEditor {
+/**
+ * Keeps the editor border color stable across renders while highlighting bash mode.
+ *
+ * When the prompt starts with `!`, Pi will run it as a bash command. This wrapper
+ * uses the warning/yellow border in that state and falls back to the muted base border otherwise.
+ */
+class BashAwareBorderEditor extends CustomEditor {
   constructor(
     tui: TUI,
     theme: EditorTheme,
     keybindings: KeybindingsManager,
-    private readonly stableBorder: (text: string) => string,
+    private readonly baseBorder: (text: string) => string,
+    private readonly bashBorder: (text: string) => string,
   ) {
-    super(tui, { ...theme, borderColor: stableBorder }, keybindings);
+    super(tui, { ...theme, borderColor: baseBorder }, keybindings);
+  }
+
+  private getBorderColor(): (text: string) => string {
+    return this.getText().startsWith("!") ? this.bashBorder : this.baseBorder;
+  }
+
+  handleInput(data: string): void {
+    super.handleInput(data);
+    this.borderColor = this.getBorderColor();
+  }
+
+  setText(text: string): void {
+    super.setText(text);
+    this.borderColor = this.getBorderColor();
+  }
+
+  insertTextAtCursor(text: string): void {
+    super.insertTextAtCursor(text);
+    this.borderColor = this.getBorderColor();
   }
 
   render(width: number): string[] {
-    this.borderColor = this.stableBorder;
+    this.borderColor = this.getBorderColor();
     return super.render(width);
   }
 }
@@ -66,6 +100,7 @@ function getStoredMode(data: unknown): FooterMode | undefined {
   return isFooterMode(value) ? value : undefined;
 }
 
+/** Compact cwd for narrow footer space while preserving the useful tail path. */
 function formatCwd(cwd: string): string {
   const home = process.env.HOME;
   const compact = home && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
@@ -75,6 +110,7 @@ function formatCwd(cwd: string): string {
   return compact;
 }
 
+/** Format Unix reset timestamps into short quota-reset labels. */
 function formatResetShort(resetAt: number | undefined): string {
   if (!resetAt) return "unknown";
 
@@ -92,6 +128,7 @@ function isOpenAICodexProvider(provider: string | undefined): boolean {
   return /^openai-codex(-\d+)?$/.test(provider ?? "");
 }
 
+/** Build the right-side model/footer payload from Pi model state and optional Codex quota globals. */
 function formatModelInfo(
   pi: ExtensionAPI,
   modelConfig: ExtensionContext["model"],
@@ -119,8 +156,9 @@ function formatModelInfo(
 export default function (pi: ExtensionAPI) {
   let mode: FooterMode = "zen";
   let activeTui: TUI | undefined;
+  let currentCtx: ExtensionContext | undefined;
   let currentModel: ExtensionContext["model"];
-  let gitBranch: string | undefined;
+  let gitInfo: GitInfo = { changedFiles: 0, isRepo: false };
 
   const rememberMode = () => {
     pi.appendEntry(STATE_TYPE, { mode });
@@ -130,26 +168,52 @@ export default function (pi: ExtensionAPI) {
     activeTui?.requestRender();
   };
 
+  /** Replace the editor with a border-stable wrapper once a TUI is available. */
   const installStableEditor = (ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
 
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {
       activeTui = tui;
-      return new StableBorderEditor(tui, theme, keybindings, (text) =>
-        ctx.ui.theme.fg("borderMuted", text),
+      return new BashAwareBorderEditor(
+        tui,
+        theme,
+        keybindings,
+        (text) => ctx.ui.theme.fg("borderMuted", text),
+        (text) => ctx.ui.theme.fg("warning", text),
       );
     });
   };
 
-  const refreshGitBranch = async (ctx: ExtensionContext) => {
-    const result = await pi
-      .exec("git", ["branch", "--show-current"], { cwd: ctx.cwd })
-      .catch(() => undefined);
-    const branch = result?.stdout.trim();
-    gitBranch = branch && branch.length > 0 ? branch : undefined;
+  /**
+   * Refresh branch and changed-file count for the dev footer.
+   *
+   * `git status --porcelain=v1` emits one line per changed path, including
+   * staged, unstaged, deleted, renamed, and untracked files.
+   */
+  const refreshGitInfo = async (ctx: ExtensionContext) => {
+    const [branchResult, statusResult] = await Promise.all([
+      pi.exec("git", ["branch", "--show-current"], { cwd: ctx.cwd }).catch(() => undefined),
+      pi.exec("git", ["status", "--porcelain=v1"], { cwd: ctx.cwd }).catch(() => undefined),
+    ]);
+
+    const branch = branchResult?.stdout.trim();
+    const changedFiles =
+      statusResult?.stdout.split("\n").filter((line) => line.trim().length > 0).length ?? 0;
+
+    gitInfo = {
+      branch: branch && branch.length > 0 ? branch : undefined,
+      changedFiles,
+      isRepo: statusResult !== undefined,
+    };
     requestRender();
   };
 
+  /** Avoid paying for git status when the dev footer is hidden. */
+  const refreshGitInfoIfVisible = () => {
+    if (mode === "dev" && currentCtx) void refreshGitInfo(currentCtx);
+  };
+
+  /** Apply zen/dev UI wiring, including widgets that are only present in dev mode. */
   const applyMode = (ctx: ExtensionContext, notify = false) => {
     if (!ctx.hasUI) return;
 
@@ -160,16 +224,21 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.setWidget("footer-mode-model-info", undefined);
       ctx.ui.setFooter(() => new EmptyFooter());
     } else {
-      void refreshGitBranch(ctx);
+      void refreshGitInfo(ctx);
       ctx.ui.setWidget("footer-mode-dev-info", (tui, theme) => {
         activeTui = tui;
         return {
           invalidate() {},
           render(width: number): string[] {
-            const branch = theme.fg("accent", gitBranch ?? "no git");
+            const changeCount = theme.fg(
+              gitInfo.changedFiles > 0 ? "warning" : "dim",
+              `(${gitInfo.changedFiles}) `,
+            );
+            const branchLabel = gitInfo.isRepo ? (gitInfo.branch ?? "no branch") : "no git";
+            const branch = theme.fg("accent", branchLabel);
             const separator = theme.fg("dim", " · ");
             const directory = theme.fg("dim", formatCwd(ctx.cwd));
-            return [truncateToWidth(branch + separator + directory, width)];
+            return [truncateToWidth(changeCount + branch + separator + directory, width)];
           },
         };
       });
@@ -224,6 +293,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     mode = "zen";
+    currentCtx = ctx;
     currentModel = ctx.model;
     installStableEditor(ctx);
     for (const entry of ctx.sessionManager.getEntries()) {
@@ -236,13 +306,14 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", () => {
     activeTui = undefined;
+    currentCtx = undefined;
     currentModel = undefined;
-    gitBranch = undefined;
+    gitInfo = { changedFiles: 0, isRepo: false };
   });
 
   pi.on("agent_start", requestRender);
-  pi.on("agent_end", requestRender);
-  pi.on("turn_end", requestRender);
+  pi.on("agent_end", refreshGitInfoIfVisible);
+  pi.on("turn_end", refreshGitInfoIfVisible);
   pi.on("model_select", (event) => {
     currentModel = event.model;
     requestRender();
