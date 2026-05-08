@@ -62,6 +62,12 @@
     ]
   },
   "workspaceRelease": {
+    "npmRelease": false,
+    "perPackageConfig": {
+      "santychuy-pi-setup": {
+        "skip": true
+      }
+    },
     "release": {
       "extends": "./.releaserc.json"
     }
