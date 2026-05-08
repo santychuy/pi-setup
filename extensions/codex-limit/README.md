@@ -8,8 +8,18 @@ Codex subscription usage footer widget for Pi. Shows 5-hour and weekly usage lim
 
 ## Install
 
+### Global
+
 ```bash
 pi install npm:pi-codex-limit
+```
+
+### Project-local
+
+Writes to `.pi/settings.json` — portable across teams:
+
+```bash
+pi install -l npm:pi-codex-limit
 ```
 
 ## Features

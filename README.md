@@ -14,19 +14,33 @@ This repo supports **two** discovery paths:
 
 ## Install
 
-### Global Pi install
+### Global install
 
-Install once and use this setup from any directory:
+Install once and use from any directory. Writes to `~/.pi/agent/settings.json`:
 
 ```bash
 pi install git:https://github.com/santychuy/pi-setup
 ```
 
-Or install locally after cloning:
+Or install from a local clone:
 
 ```bash
 git clone https://github.com/santychuy/pi-setup.git
 pi install ./pi-setup
+```
+
+### Project-local install
+
+Install scoped to a single project. Writes to `.pi/settings.json` so the setup is portable across teams — pi auto-installs missing packages on startup:
+
+```bash
+pi install -l git:https://github.com/santychuy/pi-setup
+```
+
+Or with a local path:
+
+```bash
+pi install -l ./pi-setup
 ```
 
 ### Copy into a project

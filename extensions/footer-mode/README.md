@@ -8,8 +8,18 @@ Zen/dev footer mode extension for Pi. Toggle between a clean "zen" footer and a 
 
 ## Install
 
+### Global
+
 ```bash
 pi install npm:pi-footer-mode
+```
+
+### Project-local
+
+Writes to `.pi/settings.json` — portable across teams:
+
+```bash
+pi install -l npm:pi-footer-mode
 ```
 
 ## Features
