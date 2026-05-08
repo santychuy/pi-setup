@@ -24,6 +24,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -37,4 +38,3 @@ jobs:
         run: bun run release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
