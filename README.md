@@ -1,6 +1,8 @@
-# santychuy/pi-setup
+<div align="left">
+  <img src=".github/assets/santychuyISO.png" alt="santychuyISO" width="80" style="vertical-align: middle; margin-bottom: 16px;" />
+</div>
 
-My personal Pi coding agent setup — extensions, skills, themes, and prompts. Fully shareable and installable via `pi install`.
+Personal Pi coding agent setup — extensions, skills, themes, and prompts. Fully shareable and installable via `pi install`.
 
 ## How Pi Discovers This Repo
 
