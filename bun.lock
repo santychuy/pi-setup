@@ -67,6 +67,19 @@
         "@earendil-works/pi-tui": "*",
       },
     },
+    "extensions/toast": {
+      "name": "pi-toast",
+      "version": "0.0.1",
+      "devDependencies": {
+        "@earendil-works/pi-coding-agent": "0.74.0",
+        "@earendil-works/pi-tui": "0.74.0",
+        "typescript": "5.8.3",
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-tui": "*",
+      },
+    },
     "extensions/web-access": {
       "name": "pi-agent-web-access",
       "version": "0.0.1",
@@ -1003,6 +1016,8 @@
     "pi-codex-limit": ["pi-codex-limit@workspace:extensions/codex-limit"],
 
     "pi-footer-mode": ["pi-footer-mode@workspace:extensions/footer-mode"],
+
+    "pi-toast": ["pi-toast@workspace:extensions/toast"],
 
     "picocolors": ["picocolors@1.1.1", "", {}, "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA=="],
 
