@@ -6,6 +6,10 @@
 
 Ephemeral toast overlays for the Pi TUI. Shows a short message at a fixed terminal position and automatically dismisses it after a timeout.
 
+## Demo
+
+<img width="1100" height="307" alt="CleanShot 2026-05-11 at 16 33 44" src="https://github.com/user-attachments/assets/fed7fdfb-9902-4fca-8a08-452d5998fe31" />
+
 ## Install
 
 ### Global
