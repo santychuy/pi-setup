@@ -25,6 +25,7 @@
     "check": "oxlint && oxfmt --check . && tsc --noEmit",
     "install:local": "bun scripts/install-local.ts",
     "link:local": "bun scripts/link-local.ts",
+    "npm:trust": "bun scripts/setup-npm-trust.ts",
     "release": "semantic-release-npm-workspaces-monorepo",
     "prepare": "husky"
   },
