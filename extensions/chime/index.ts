@@ -1,5 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 type TerminalType =
   | "kitty"
@@ -9,6 +12,50 @@ type TerminalType =
   | "macos-terminal"
   | "warp"
   | "unknown";
+
+interface ChimeConfig {
+  sound?: string;
+}
+
+// ── Config storage ──────────────────────────────────────────────────────────
+
+const CONFIG_DIR = join(homedir(), ".config", "pi-chime");
+const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+
+const DEFAULT_SOUND = "Purr";
+
+const AVAILABLE_SOUNDS = [
+  { name: "Purr", description: "Soft and pleasant" },
+  { name: "Glass", description: "Clear timer-like" },
+  { name: "Hero", description: "Triumphant" },
+];
+
+const loadConfig = (): ChimeConfig => {
+  try {
+    if (existsSync(CONFIG_PATH)) {
+      const raw = readFileSync(CONFIG_PATH, "utf-8");
+      return JSON.parse(raw) as ChimeConfig;
+    }
+  } catch {
+    // ignore read/parse errors
+  }
+  return {};
+};
+
+const saveConfig = (config: ChimeConfig): void => {
+  try {
+    if (!existsSync(CONFIG_DIR)) {
+      mkdirSync(CONFIG_DIR, { recursive: true });
+    }
+    writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+  } catch {
+    // ignore write errors
+  }
+};
+
+const getSound = (): string => loadConfig().sound ?? DEFAULT_SOUND;
+
+// ── Terminal detection ──────────────────────────────────────────────────────
 
 const normalizeTerm = (s?: string): string => (s ?? "").toLowerCase().trim();
 
@@ -59,8 +106,9 @@ const isDarwin = process.platform === "darwin";
 
 const escapeAppleScript = (s: string): string => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
-const notifyMacOS = (title: string, body: string): void => {
-  const script = `display notification "${escapeAppleScript(body)}" with title "${escapeAppleScript(title)}"`;
+const notifyMacOS = (title: string, body: string, sound?: string): void => {
+  const soundArg = sound ? ` sound name "${escapeAppleScript(sound)}"` : "";
+  const script = `display notification "${escapeAppleScript(body)}" with title "${escapeAppleScript(title)}"${soundArg}`;
   execFile("osascript", ["-e", script], (err) => {
     if (err) return;
   });
@@ -70,6 +118,7 @@ const notifyMacOS = (title: string, body: string): void => {
 
 const chime = (title: string, body: string): void => {
   const terminal = detectTerminal();
+  const sound = getSound();
 
   // 1. Terminal-native notification (best protocol for the detected emulator)
   switch (terminal) {
@@ -93,11 +142,47 @@ const chime = (title: string, body: string): void => {
 
   // 2. macOS Notification Center banner (always on macOS, regardless of terminal)
   if (isDarwin) {
-    notifyMacOS(title, body);
+    notifyMacOS(title, body, sound);
   }
 
   // 3. Universal BEL fallback
   notifyBEL();
+};
+
+// ── Settings menu ───────────────────────────────────────────────────────────
+
+const showSettingsMenu = async (ctx: {
+  ui: {
+    select: (title: string, options: string[]) => Promise<string | undefined>;
+    notify: (message: string, type?: "info" | "warning" | "error") => void;
+  };
+}): Promise<void> => {
+  const currentSound = getSound();
+
+  const choice = await ctx.ui.select("Chime Settings", [
+    "Test notification",
+    `Change sound (current: ${currentSound})`,
+    "Exit",
+  ]);
+
+  if (choice === "Test notification") {
+    chime("Pi Chime", "Test notification");
+    ctx.ui.notify(`Chime sent with sound: ${getSound()}`, "info");
+  } else if (choice?.startsWith("Change sound")) {
+    const soundOptions = AVAILABLE_SOUNDS.map((s) => `${s.name} — ${s.description}`);
+    const selected = await ctx.ui.select("Select notification sound", soundOptions);
+
+    if (selected) {
+      const soundName = selected.split(" — ")[0];
+      if (soundName) {
+        saveConfig({ sound: soundName });
+        ctx.ui.notify(`Notification sound set to: ${soundName}`, "info");
+        // Preview the selected sound immediately
+        notifyMacOS("Pi Chime", "Sound preview", soundName);
+      }
+    }
+  }
+  // Exit: do nothing
 };
 
 // ── Extension entrypoint ────────────────────────────────────────────────────
@@ -108,11 +193,9 @@ export default (pi: ExtensionAPI): void => {
   });
 
   pi.registerCommand("chime", {
-    description: "Send a test terminal notification",
+    description: "Chime settings — test notification or change sound",
     handler: async (_args, ctx) => {
-      const terminal = detectTerminal();
-      chime("Pi Chime", "Test notification");
-      ctx.ui.notify(`Chime sent (detected: ${terminal})`, "info");
+      await showSettingsMenu(ctx);
     },
   });
 };

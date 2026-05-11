@@ -53,7 +53,24 @@ If you don't see macOS Notification Center banners, your terminal app may not ha
 
 ## Commands
 
-- `/chime` — send a test notification and show which terminal was detected
+- `/chime` — open the chime settings menu where you can:
+  - **Test notification** — trigger a notification with your current sound
+  - **Change sound** — cycle through available notification sounds and preview them
+  - **Exit** — close the menu
+
+## Sound Customization (macOS)
+
+When running on macOS, you can customize the notification sound played by the `osascript` Notification Center banner. Use `/chime` → **Change sound** to select from the available options:
+
+| Sound   | Description       |
+| ------- | ----------------- |
+| `Purr`  | Soft and pleasant |
+| `Glass` | Clear timer-like  |
+| `Hero`  | Triumphant        |
+
+Your selection is saved to `~/.config/pi-chime/config.json` and persists across sessions. The default sound is `Purr`.
+
+You can also use any sound name from `/System/Library/Sounds/` by editing the config file directly.
 
 ## Behind the Scenes
 
