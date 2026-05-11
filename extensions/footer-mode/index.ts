@@ -1,5 +1,6 @@
 import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { spinners } from "unicode-animations";
 import {
   CustomEditor,
   type ExtensionAPI,
@@ -39,6 +40,7 @@ declare global {
 const STATE_TYPE = "footer-mode-state";
 const SHORTCUT = "alt+f";
 const TURN_DURATION_UPDATE_INTERVAL_MS = 250;
+const WORKING_SPINNER = spinners.columns;
 
 /** Hides Pi's default footer while keeping the custom below-editor widgets active. */
 class EmptyFooter implements Component {
@@ -329,10 +331,18 @@ export default function (pi: ExtensionAPI) {
     if (mode === "dev" && currentCtx) void refreshGitInfo(currentCtx);
   };
 
+  const applyWorkingIndicator = (ctx: ExtensionContext) => {
+    ctx.ui.setWorkingIndicator({
+      frames: WORKING_SPINNER.frames.map((frame) => ctx.ui.theme.fg("accent", frame)),
+      intervalMs: WORKING_SPINNER.interval,
+    });
+  };
+
   /** Apply zen/dev UI wiring, including widgets that are only present in dev mode. */
   const applyMode = (ctx: ExtensionContext, notify = false) => {
     if (!ctx.hasUI) return;
 
+    applyWorkingIndicator(ctx);
     ctx.ui.setWorkingVisible(mode === "dev");
 
     ctx.ui.setWidget("footer-mode-context-bar", undefined);
@@ -440,6 +450,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", (_event, ctx) => {
     clearTurnDurationTimer();
     ctx.ui.setWorkingMessage();
+    ctx.ui.setWorkingIndicator();
     turnStartedAt = undefined;
     activeTui = undefined;
     currentCtx = undefined;

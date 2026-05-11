@@ -28,6 +28,9 @@
     "access": "public",
     "provenance": true
   },
+  "dependencies": {
+    "unicode-animations": "1.0.3"
+  },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.74.0",
     "@earendil-works/pi-tui": "0.74.0",
