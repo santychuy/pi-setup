@@ -120,35 +120,36 @@ const chime = (title: string, body: string): void => {
   const terminal = detectTerminal();
   const sound = getSound();
 
-  // 1. Terminal-native notification (best protocol for the detected emulator)
+  // Prefer terminal-native notifications when supported. On macOS this also
+  // avoids duplicate banners and lets the terminal app provide its own icon.
   switch (terminal) {
     case "kitty":
       notifyOSC99(title, body);
-      break;
+      return;
     case "ghostty":
     case "wezterm":
     case "iterm2":
       // Ghostty, WezTerm, and iTerm2 all support OSC 9 natively
       notifyOSC9(`${title}: ${body}`);
-      break;
-    case "macos-terminal":
-      // Terminal.app doesn't support OSC notifications
-      break;
-    default:
-      // Warp + unknown terminals: OSC 777 has the widest support
+      return;
+    case "warp":
+    case "unknown":
+      // OSC 777 has broad support among terminals that implement notifications
       notifyOSC777(title, body);
+      return;
+    case "macos-terminal":
+      // Terminal.app doesn't support OSC notifications; fall through to macOS
       break;
   }
 
-  // 2. macOS Notification Center banner (always on macOS, regardless of terminal)
+  // macOS fallback for Terminal.app or unsupported terminal-native paths.
   if (isDarwin) {
     notifyMacOS(title, body, sound);
+    return;
   }
 
-  // 3. Universal BEL fallback (skip on macOS — osascript already handles the alert)
-  if (!isDarwin) {
-    notifyBEL();
-  }
+  // Universal fallback for non-macOS environments.
+  notifyBEL();
 };
 
 // ── Settings menu ───────────────────────────────────────────────────────────
