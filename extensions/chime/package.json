@@ -1,0 +1,44 @@
+{
+  "name": "pi-chime",
+  "version": "0.0.1",
+  "description": "Terminal bell notification for Pi — chimes when the agent finishes responding",
+  "keywords": [
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-package"
+  ],
+  "homepage": "https://github.com/santychuy/pi-setup/tree/main/extensions/chime",
+  "bugs": {
+    "url": "https://github.com/santychuy/pi-setup/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/santychuy/pi-setup.git",
+    "directory": "extensions/chime"
+  },
+  "files": [
+    "index.ts",
+    "package.json",
+    "README.md",
+    "docs"
+  ],
+  "type": "module",
+  "main": "index.ts",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.74.0",
+    "typescript": "5.8.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

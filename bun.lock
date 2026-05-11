@@ -18,12 +18,21 @@
         "oxlint": "1.63.0",
         "semantic-release": "25.0.3",
         "semantic-release-npm-workspaces-monorepo": "3.2.2",
-        "typebox": "1.1.38",
         "typescript": "5.8.3",
       },
       "peerDependencies": {
         "@earendil-works/pi-coding-agent": "*",
-        "typebox": "*",
+      },
+    },
+    "extensions/chime": {
+      "name": "pi-chime",
+      "version": "0.0.1",
+      "devDependencies": {
+        "@earendil-works/pi-coding-agent": "0.74.0",
+        "typescript": "5.8.3",
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
       },
     },
     "extensions/codex-limit": {
@@ -928,6 +937,8 @@
 
     "pend": ["pend@1.2.0", "", {}, "sha512-F3asv42UuXchdzt+xXqfW1OGlVBe+mxa2mqI0pg5yAHZPvFmY3Y6drSf/GQ1A86WgWEN9Kzh/WrgKa6iGcHXLg=="],
 
+    "pi-chime": ["pi-chime@workspace:extensions/chime"],
+
     "pi-codex-limit": ["pi-codex-limit@workspace:extensions/codex-limit"],
 
     "pi-footer-mode": ["pi-footer-mode@workspace:extensions/footer-mode"],
@@ -1181,6 +1192,8 @@
     "execa/get-stream": ["get-stream@6.0.1", "", {}, "sha512-ts6Wi+2j3jQjqi70w5AlN8DFnkSwC+MqmxEzdEALB2qXZYV3X/b1CTfgPLGJNMeAWxdPfU8FO1ms3NUfaHCPYg=="],
 
     "extract-zip/get-stream": ["get-stream@5.2.0", "", { "dependencies": { "pump": "^3.0.0" } }, "sha512-nBF+F1rAZVCu/p7rjzgA+Yb4lfYXrpl7a6VmJrU8wF9I1CKvP/QwPNZHnOlwbTkY6dvtFIzFMSyQXbLoTQPRpA=="],
+
+    "fdir/picomatch": ["picomatch@4.0.4", "", {}, "sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A=="],
 
     "foreground-child/signal-exit": ["signal-exit@4.1.0", "", {}, "sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw=="],
 
