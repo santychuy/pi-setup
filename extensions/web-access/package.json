@@ -1,0 +1,57 @@
+{
+  "name": "pi-agent-web-access",
+  "version": "0.0.1",
+  "description": "Web search (Exa + Brave) and content extraction for Pi",
+  "keywords": [
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-package",
+    "web-search"
+  ],
+  "homepage": "https://github.com/santychuy/pi-setup/tree/main/extensions/web-access",
+  "bugs": {
+    "url": "https://github.com/santychuy/pi-setup/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/santychuy/pi-setup.git",
+    "directory": "extensions/web-access"
+  },
+  "files": [
+    "index.ts",
+    "search.ts",
+    "extract.ts",
+    "utils.ts",
+    "package.json",
+    "README.md"
+  ],
+  "type": "module",
+  "main": "index.ts",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.5.0",
+    "linkedom": "^0.16.0",
+    "p-limit": "^6.1.0",
+    "turndown": "^7.2.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.74.0",
+    "@earendil-works/pi-coding-agent": "0.74.0",
+    "@earendil-works/pi-tui": "0.74.0",
+    "typescript": "5.8.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -4,3 +4,4 @@ dist/
 *.tsbuildinfo
 .pi/npm/
 .pi/git/
+extensions/web-access/web-search.json
