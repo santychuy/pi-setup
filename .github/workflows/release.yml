@@ -39,3 +39,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HUSKY: "0"
+          NPM_CONFIG_WORKSPACES_UPDATE: "false"
