@@ -145,8 +145,10 @@ const chime = (title: string, body: string): void => {
     notifyMacOS(title, body, sound);
   }
 
-  // 3. Universal BEL fallback
-  notifyBEL();
+  // 3. Universal BEL fallback (skip on macOS — osascript already handles the alert)
+  if (!isDarwin) {
+    notifyBEL();
+  }
 };
 
 // ── Settings menu ───────────────────────────────────────────────────────────
