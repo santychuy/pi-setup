@@ -4,7 +4,7 @@
 
 # pi-chime
 
-Terminal bell notification for Pi — chimes when the agent finishes responding. Detects your terminal emulator and uses the best available notification protocol.
+Terminal bell notification for Pi — chimes when the agent finishes responding. Detects your terminal emulator and uses the best available notification protocol, **and** sends a native macOS Notification Center banner when running on macOS.
 
 ## Install
 
@@ -24,18 +24,32 @@ pi install -l npm:pi-chime
 
 ## How It Works
 
-Pi-chime hooks into `agent_end` and sends a terminal notification when the agent loop finishes. It automatically detects which terminal you're running and picks the richest protocol that terminal supports, always ending with a BEL (`\x07`) character as a universal fallback.
+Pi-chime hooks into `agent_end` and sends a notification when the agent loop finishes. It automatically detects which terminal you're running and picks the richest protocol that terminal supports. On macOS, it **also** triggers a Notification Center banner via `osascript` so you get a push-style alert even if the terminal's own OSC notification is subtle or suppressed.
+
+Every chime ends with a BEL (`\x07`) character as a universal fallback.
 
 ## Terminal Support
 
-| Terminal           | Protocol  | Fallback |
-| ------------------ | --------- | -------- |
-| Kitty              | OSC 99    | BEL      |
-| WezTerm            | OSC 777   | BEL      |
-| Ghostty            | OSC 777   | BEL      |
-| Warp               | OSC 777   | BEL      |
-| macOS Terminal.app | osascript | BEL      |
-| Unknown            | OSC 777   | BEL      |
+| Terminal           | Native Protocol | macOS Banner | Fallback |
+| ------------------ | --------------- | ------------ | -------- |
+| Kitty              | OSC 99          | Yes          | BEL      |
+| Ghostty            | OSC 9           | Yes          | BEL      |
+| WezTerm            | OSC 9           | Yes          | BEL      |
+| iTerm2             | OSC 9           | Yes          | BEL      |
+| Warp               | OSC 777         | Yes          | BEL      |
+| macOS Terminal.app | —               | Yes          | BEL      |
+| Unknown            | OSC 777         | Yes (macOS)  | BEL      |
+
+## macOS Notification Permissions
+
+If you don't see macOS Notification Center banners, your terminal app may not have permission to send notifications:
+
+1. Open **System Settings → Notifications**
+2. Find your terminal app (e.g., Ghostty, WezTerm, iTerm2, Warp, Terminal)
+3. Ensure **Allow Notifications** is turned on
+4. Set **Alert style** to **Banners** or **Alerts**
+
+> The banner is sent via `osascript`, which inherits the notification sandbox of the calling terminal process. If the terminal lacks permission, macOS silently drops the notification.
 
 ## Commands
 
