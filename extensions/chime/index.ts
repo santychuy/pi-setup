@@ -117,11 +117,19 @@ const notifyMacOS = (title: string, body: string, sound?: string): void => {
 // ── Main chime routine ──────────────────────────────────────────────────────
 
 const chime = (title: string, body: string): void => {
-  const terminal = detectTerminal();
   const sound = getSound();
 
-  // Prefer terminal-native notifications when supported. On macOS this also
-  // avoids duplicate banners and lets the terminal app provide its own icon.
+  // On macOS, use the host notification system so the configured system sound
+  // is actually requested. Terminal-native OSC notifications do not carry the
+  // macOS `sound name` option and can silently prevent the chime from playing.
+  if (isDarwin) {
+    notifyMacOS(title, body, sound);
+    return;
+  }
+
+  const terminal = detectTerminal();
+
+  // Prefer terminal-native notifications when supported on non-macOS hosts.
   switch (terminal) {
     case "kitty":
       notifyOSC99(title, body);
@@ -138,14 +146,7 @@ const chime = (title: string, body: string): void => {
       notifyOSC777(title, body);
       return;
     case "macos-terminal":
-      // Terminal.app doesn't support OSC notifications; fall through to macOS
       break;
-  }
-
-  // macOS fallback for Terminal.app or unsupported terminal-native paths.
-  if (isDarwin) {
-    notifyMacOS(title, body, sound);
-    return;
   }
 
   // Universal fallback for non-macOS environments.
