@@ -39,7 +39,8 @@ function run(command: string, commandArgs: string[], options: { allowFailure?: b
 }
 
 console.log(`Checking npm package: ${packageName}`);
-run("npm", ["view", packageName, "version"]);
+// Allow 404 — package may not exist yet
+run("npm", ["view", packageName, "version"], { allowFailure: true });
 
 console.log(`\nExisting trusted publisher config, if any:`);
 run("npm", ["trust", "list", packageName], { allowFailure: true });
