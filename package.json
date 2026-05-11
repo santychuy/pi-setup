@@ -63,13 +63,19 @@
   },
   "workspaceRelease": {
     "changelogCommit": false,
+    "npmRelease": true,
+    "extendsDefaultPlugins": [
+      "@semantic-release/github"
+    ],
     "perPackageConfig": {
       "santychuy-pi-setup": {
         "skip": true
       }
     },
     "release": {
-      "extends": "../../.releaserc.json"
+      "branches": [
+        "main"
+      ]
     }
   }
 }
