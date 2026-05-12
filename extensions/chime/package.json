@@ -18,23 +18,38 @@
     "directory": "extensions/chime"
   },
   "files": [
-    "index.ts",
-    "package.json",
+    "dist",
     "README.md",
     "docs"
   ],
   "type": "module",
-  "main": "index.ts",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
+  "scripts": {
+    "prepublishOnly": "tsdown"
+  },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.74.0",
     "typescript": "5.8.3"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
+  },
+  "tsdown": {
+    "entry": [
+      "index.ts"
+    ]
   },
   "pi": {
     "extensions": [

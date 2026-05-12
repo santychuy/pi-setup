@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { ToastVariant, ToastPosition } from "./types.js";
-import { showToast } from "./api.js";
+import type { ToastVariant, ToastPosition } from "./types";
+import { showToast } from "./api";
 
 /**
  * Register the `show_toast` LLM tool.

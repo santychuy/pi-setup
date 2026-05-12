@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ToastShowEvent } from "./types.js";
-import { showToast } from "./api.js";
+import type { ToastShowEvent } from "./types";
+import { showToast } from "./api";
 
 /**
  * Register the `toast:show` event bus listener.

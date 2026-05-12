@@ -13,7 +13,7 @@ import {
   getBraveApiKey,
   loadConfig,
   type ExtractedContent,
-} from "./utils.js";
+} from "./utils";
 
 // ── Exa constants ────────────────────────────────────────────────────────────
 

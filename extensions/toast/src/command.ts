@@ -1,6 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { showToast } from "./api.js";
-import { parseArgs } from "./parse.js";
+import { showToast } from "./api";
+import { parseArgs } from "./parse";
 
 export const TOAST_COMMAND_DESCRIPTION =
   "Show a temporary TUI toast: /toast [--type info|success|warning|error] [--position top-right|bottom-right] message";

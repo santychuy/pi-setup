@@ -416,7 +416,7 @@ function installWidget(ctx: ExtensionContext) {
 }
 
 /** Register lifecycle hooks and the `/codex-limit` command. */
-export default function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI): void {
   let inFlight: Promise<UsageSnapshot | undefined> = Promise.resolve(undefined);
 
   /** Serialize refreshes so model changes and agent_end cannot fetch concurrently. */

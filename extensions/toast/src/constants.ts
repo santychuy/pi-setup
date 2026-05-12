@@ -1,4 +1,4 @@
-import type { ToastOptions, ToastVariant, ToastColorRole } from "./types.js";
+import type { ToastOptions, ToastVariant, ToastColorRole } from "./types";
 
 export const DEFAULT_TOAST_OPTIONS: Omit<ToastOptions, "message"> = {
   variant: "info",

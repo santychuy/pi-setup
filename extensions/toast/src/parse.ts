@@ -1,5 +1,5 @@
-import type { ToastOptions, ToastVariant, ToastPosition } from "./types.js";
-import { DEFAULT_TOAST_OPTIONS } from "./constants.js";
+import type { ToastOptions, ToastVariant, ToastPosition } from "./types";
+import { DEFAULT_TOAST_OPTIONS } from "./constants";
 
 // ─── Guards ─────────────────────────────────────────────────────────────────
 

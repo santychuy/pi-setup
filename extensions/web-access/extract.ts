@@ -1,8 +1,8 @@
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
-import type { ExtractedContent } from "./utils.js";
-import { errorMessage } from "./utils.js";
+import type { ExtractedContent } from "./utils";
+import { errorMessage } from "./utils";
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024; // 5MB

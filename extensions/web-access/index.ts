@@ -3,15 +3,15 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import pLimit from "p-limit";
-import { search } from "./search.js";
-import { extractContent } from "./extract.js";
+import { search } from "./search";
+import { extractContent } from "./extract";
 import {
   loadConfig,
   getExaApiKey,
   getBraveApiKey,
   errorMessage,
   type ExtractedContent,
-} from "./utils.js";
+} from "./utils";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -210,7 +210,7 @@ const renderSearchResult = (
 
 // ── Extension entrypoint ─────────────────────────────────────────────────────
 
-const webAccessExtension = (pi: ExtensionAPI) => {
+const webAccessExtension = (pi: ExtensionAPI): void => {
   // ── Session lifecycle ──────────────────────────────────────────────────────
 
   pi.on("session_start", () => {

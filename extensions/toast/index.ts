@@ -9,12 +9,12 @@ import type {
   ToastShowEvent,
   ToastVariant,
   ToastPosition,
-} from "./src/types.js";
-import { DEFAULT_TOAST_OPTIONS } from "./src/constants.js";
-import { showToast } from "./src/api.js";
-import { handleToastCommand, TOAST_COMMAND_DESCRIPTION } from "./src/command.js";
-import { registerToastTool } from "./src/tool.js";
-import { registerToastEvent } from "./src/event.js";
+} from "./src/types";
+import { DEFAULT_TOAST_OPTIONS } from "./src/constants";
+import { showToast } from "./src/api";
+import { handleToastCommand, TOAST_COMMAND_DESCRIPTION } from "./src/command";
+import { registerToastTool } from "./src/tool";
+import { registerToastEvent } from "./src/event";
 
 // ─── Re-exports ─────────────────────────────────────────────────────────────
 

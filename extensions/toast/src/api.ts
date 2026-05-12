@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ToastOptions, ToastInput } from "./types.js";
-import { DEFAULT_TOAST_OPTIONS, ANIMATION, WIDTH } from "./constants.js";
-import { createToastComponent } from "./component.js";
+import type { ToastOptions, ToastInput } from "./types";
+import { DEFAULT_TOAST_OPTIONS, ANIMATION, WIDTH } from "./constants";
+import { createToastComponent } from "./component";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

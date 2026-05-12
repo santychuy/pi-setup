@@ -1,8 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { ToastOptions, AnimationPhase } from "./types.js";
-import { VARIANT_ICON, VARIANT_COLOR } from "./constants.js";
+import type { ToastOptions, AnimationPhase } from "./types";
+import { VARIANT_ICON, VARIANT_COLOR } from "./constants";
 
 // ─── Factory ────────────────────────────────────────────────────────────────
 

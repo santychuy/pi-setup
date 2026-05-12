@@ -21,26 +21,42 @@
     "directory": "extensions/toast"
   },
   "files": [
-    "index.ts",
-    "package.json",
+    "dist",
     "README.md",
-    "docs",
-    "src"
+    "docs"
   ],
   "type": "module",
-  "main": "index.ts",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
+  "scripts": {
+    "prepublishOnly": "tsdown"
+  },
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.74.0",
-    "@earendil-works/pi-tui": "0.74.0",
     "typescript": "5.8.3"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
+  },
+  "tsdown": {
+    "entry": [
+      "index.ts"
+    ]
   },
   "pi": {
     "extensions": [

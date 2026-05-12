@@ -226,7 +226,7 @@ function formatModelInfo(
   };
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI): void {
   let mode: FooterMode = "zen";
   let activeTui: TUI | undefined;
   let currentCtx: ExtensionContext | undefined;
