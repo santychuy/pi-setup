@@ -1,0 +1,29 @@
+{
+  "name": "pi-leaders",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Private foreground leader subagents for Pi delegation experiments",
+  "type": "module",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
+  },
+  "tsdown": {
+    "entry": [
+      "index.ts"
+    ]
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
