@@ -18,6 +18,7 @@
     "directory": "extensions/codex-limit"
   },
   "files": [
+    "index.ts",
     "dist",
     "README.md"
   ],
@@ -61,7 +62,7 @@
   },
   "pi": {
     "extensions": [
-      "./dist/index.mjs"
+      "./index.ts"
     ]
   }
 }
