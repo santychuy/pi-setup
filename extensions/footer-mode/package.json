@@ -37,7 +37,7 @@
     "provenance": true
   },
   "scripts": {
-    "prepublishOnly": "tsdown"
+    "prepublishOnly": "tsdown --no-config --format esm --format cjs --dts --exports --clean --sourcemap --shims index.ts"
   },
   "dependencies": {
     "unicode-animations": "1.0.3"
