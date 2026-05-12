@@ -1,5 +1,8 @@
 {
-  "packages": ["npm:@llblab/pi-telegram"],
+  "packages": [
+    "npm:@llblab/pi-telegram",
+    "npm:@aliou/pi-processes"
+  ],
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.5",
   "defaultThinkingLevel": "low",
