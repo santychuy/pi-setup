@@ -18,6 +18,7 @@
     "directory": "extensions/chime"
   },
   "files": [
+    "index.ts",
     "dist",
     "README.md",
     "docs"
@@ -45,6 +46,11 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
   },
   "tsdown": {
     "entry": [
