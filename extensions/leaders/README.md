@@ -10,6 +10,13 @@ Leader subagents for Pi — delegate focused tasks to child Pi processes with is
 - **Async/background**: Run leaders in the background while the parent continues working
 - **Live streaming**: Real-time progress updates during foreground runs
 
+### Add-ons (simple overview)
+
+- **Delegation contract (V1)**: Optional `contract` input to request structured final output.
+- **Contract validation**: Contracted runs validate final output; invalid shape returns `schema_error`.
+- **Budget policy (V1)**: Optional `budget` input for runtime limits.
+- **Default depth guardrail**: `maxDelegationDepth = 1` (leaders spawn only one level for now).
+
 ## Usage
 
 ### Tool
@@ -26,6 +33,30 @@ Ask Pi naturally, or call the `leader` tool directly:
 
 ```json
 { "task": "Continue this refactor", "mode": "fork", "agent": "worker" }
+```
+
+```json
+{
+  "task": "Audit auth flow",
+  "agent": "reviewer",
+  "contract": { "version": "1.0", "taskId": "auth-audit-1", "goal": "Find auth risks" }
+}
+```
+
+```json
+{
+  "task": "Run scoped analysis",
+  "agent": "scout",
+  "budget": {
+    "version": "1.0",
+    "limits": {
+      "maxAgentsPerRun": 3,
+      "maxParallel": 2,
+      "maxDelegationDepth": 1,
+      "maxDurationMs": 300000
+    }
+  }
+}
 ```
 
 ```json

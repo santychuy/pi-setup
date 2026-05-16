@@ -6,6 +6,15 @@ This document explains how the `leaders` extension works, what each module does,
 
 Leaders lets a parent Pi session delegate tasks to focused child Pi processes. Each child runs in isolation with its own context, tools, and optional system prompt. The parent gets back a structured result with the child's output, usage stats, tool calls, and exit status.
 
+## Add-ons (quick list)
+
+- Delegation contract (V1): optional structured contract input.
+- Contract validation: contracted runs validate final output and can fail with `schema_error`.
+- Budget policy (V1): optional budget limits passed per run.
+- Depth guardrail default: `maxDelegationDepth = 1`.
+
+> Keep this section lightweight. Add deep implementation details in dedicated subsections over time.
+
 ## Mental model
 
 ```
