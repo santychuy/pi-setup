@@ -5,6 +5,7 @@
   ],
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.5",
+  "enabledModels": ["gpt-5.5", "gpt-5.3-codex", "glm-5.1", "kimi-k2.6"],
   "defaultThinkingLevel": "low",
   "quietStartup": true
 }
