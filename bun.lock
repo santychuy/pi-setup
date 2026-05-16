@@ -28,6 +28,16 @@
         "@earendil-works/pi-coding-agent": "*",
       },
     },
+    "extensions/bash-block": {
+      "name": "pi-bash-block",
+      "version": "0.0.1",
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+      },
+      "optionalPeers": [
+        "@earendil-works/pi-coding-agent",
+      ],
+    },
     "extensions/chime": {
       "name": "pi-chime",
       "version": "0.0.1",
@@ -1448,6 +1458,8 @@
     "pend": ["pend@1.2.0", "", {}, "sha512-F3asv42UuXchdzt+xXqfW1OGlVBe+mxa2mqI0pg5yAHZPvFmY3Y6drSf/GQ1A86WgWEN9Kzh/WrgKa6iGcHXLg=="],
 
     "pi-agent-web-access": ["pi-agent-web-access@workspace:extensions/web-access"],
+
+    "pi-bash-block": ["pi-bash-block@workspace:extensions/bash-block"],
 
     "pi-chime": ["pi-chime@workspace:extensions/chime"],
 
