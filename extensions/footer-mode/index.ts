@@ -139,6 +139,11 @@ function formatDuration(ms: number): string {
   return `${seconds}s`;
 }
 
+function formatTokensPerSecond(tokensPerSecond: number): string {
+  if (tokensPerSecond >= 100) return `${Math.round(tokensPerSecond)} tok/s`;
+  return `${tokensPerSecond.toFixed(1)} tok/s`;
+}
+
 function isOpenAICodexProvider(provider: string | undefined): boolean {
   return /^openai-codex(-\d+)?$/.test(provider ?? "");
 }
@@ -235,6 +240,7 @@ export default function (pi: ExtensionAPI): void {
   let turnStartedAt: number | undefined;
   let turnDurationTimer: ReturnType<typeof setInterval> | undefined;
   let lastTurnDuration: number | undefined;
+  let lastTurnTokensPerSecond: number | undefined;
 
   const rememberMode = () => {
     pi.appendEntry(STATE_TYPE, { mode });
@@ -266,6 +272,7 @@ export default function (pi: ExtensionAPI): void {
     clearTurnDurationTimer();
     turnStartedAt = Date.now();
     lastTurnDuration = undefined;
+    lastTurnTokensPerSecond = undefined;
     requestRender();
     updateTurnDurationDisplay(ctx);
 
@@ -274,8 +281,8 @@ export default function (pi: ExtensionAPI): void {
     }, TURN_DURATION_UPDATE_INTERVAL_MS);
   };
 
-  const stopTurnDuration = (ctx: ExtensionContext) => {
-    if (turnStartedAt === undefined) return;
+  const stopTurnDuration = (ctx: ExtensionContext): number | undefined => {
+    if (turnStartedAt === undefined) return undefined;
 
     lastTurnDuration = Date.now() - turnStartedAt;
     turnStartedAt = undefined;
@@ -284,6 +291,7 @@ export default function (pi: ExtensionAPI): void {
     ctx.ui.setWorkingMessage();
     updateTurnDurationDisplay(ctx);
     requestRender();
+    return lastTurnDuration;
   };
 
   /** Replace the editor with a border-stable wrapper once a TUI is available. */
@@ -379,6 +387,9 @@ export default function (pi: ExtensionAPI): void {
             invalidate() {},
             render(width: number): string[] {
               const info = formatModelInfo(pi, currentModel);
+              const speed = lastTurnTokensPerSecond
+                ? theme.fg("dim", `${formatTokensPerSecond(lastTurnTokensPerSecond)} · `)
+                : "";
               const duration = lastTurnDuration
                 ? theme.fg("dim", `took ${formatDuration(lastTurnDuration)} · `)
                 : "";
@@ -402,7 +413,7 @@ export default function (pi: ExtensionAPI): void {
                 ? theme.fg("dim", " · ") +
                   theme.getThinkingBorderColor(info.thinking)(info.thinking)
                 : "";
-              const left = duration + provider + slash + model + usage + thinking;
+              const left = speed + duration + provider + slash + model + usage + thinking;
               const contextBar = formatContextBar(
                 ctx,
                 currentModel,
@@ -452,6 +463,8 @@ export default function (pi: ExtensionAPI): void {
     ctx.ui.setWorkingMessage();
     ctx.ui.setWorkingIndicator();
     turnStartedAt = undefined;
+    lastTurnDuration = undefined;
+    lastTurnTokensPerSecond = undefined;
     activeTui = undefined;
     currentCtx = undefined;
     currentModel = undefined;
@@ -465,8 +478,15 @@ export default function (pi: ExtensionAPI): void {
   pi.on("agent_start", requestRender);
   pi.on("message_update", requestRender);
   pi.on("message_end", requestRender);
-  pi.on("agent_end", (_event, ctx) => {
-    stopTurnDuration(ctx);
+  pi.on("agent_end", (event, ctx) => {
+    const elapsed = stopTurnDuration(ctx);
+    const outputTokens = event.messages.reduce((total, message) => {
+      if (message.role !== "assistant") return total;
+      return total + (message.usage?.output ?? 0);
+    }, 0);
+
+    lastTurnTokensPerSecond =
+      elapsed && outputTokens > 0 ? outputTokens / (elapsed / 1000) : undefined;
     refreshGitInfoIfVisible();
   });
   pi.on("turn_end", () => {
