@@ -1,230 +1,211 @@
+/**
+ * Leaders extension — foreground leader subagents for Pi delegation.
+ *
+ * Spawns child Pi processes with isolated context and streams their
+ * JSON output back as structured results.
+ *
+ * Session modes:
+ *   - ephemeral: one-shot, no saved session (default)
+ *   - persistent: saved session for follow-up/continuity
+ *   - fork: branch from parent context for context-aware tasks
+ */
+
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-const SESSION_DIR = path.join(os.homedir(), ".pi", "agent", "sessions", "leaders");
-const LEADER_TOOLS = ["read", "bash", "grep", "find", "ls"] as const;
-const SESSION_MODES = ["ephemeral", "persistent"] as const;
-const DEFAULT_SESSION_MODE: LeaderSessionMode = "ephemeral";
-const MAX_RESULT_CHARS = 24_000;
-const CHILD_ENV = "PI_LEADERS_CHILD";
+import { DEFAULT_AGENT } from "./src/types.js";
+import type { LeaderAgentConfig, LeaderSingleResult, LeaderSessionMode } from "./src/types.js";
+import { LeaderTracker } from "./src/tracker.js";
+import { renderLeadersWidget } from "./src/widget.js";
 
-type LeaderSessionMode = (typeof SESSION_MODES)[number];
+import { createStreamParseState, getFinalOutput, processStreamChunk } from "./src/stream-parser.js";
+import { formatLeaderResult, formatUsageStats } from "./src/format.js";
+import { CHILD_ENV, makeSessionFile, writePromptToTempFile, cleanupTempFile } from "./src/utils.js";
+import { buildLeaderArgs } from "./src/spawn-builder.js";
+import {
+  spawnAsyncLeader,
+  readAsyncStatus,
+  listAsyncRuns,
+  cleanupOldAsyncRuns,
+  formatAsyncStatus,
+} from "./src/async.js";
 
-type LeaderRunResult = {
-  output: string;
-  mode: LeaderSessionMode;
-  sessionFile?: string;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-};
+// ── Forked Context ──────────────────────────────────────────────────────────
 
-type LeaderCommandInput = {
-  task: string;
-  mode: LeaderSessionMode;
-};
+/**
+ * Create a branched session file from the parent's current context.
+ * Returns the branched session file path on success, or an error string on failure.
+ */
+const createForkedSessionFile = (ctx: ExtensionContext): string | undefined => {
+  const parentFile = ctx.sessionManager.getSessionFile();
 
-type JsonRecord = Record<string, unknown>;
+  if (!parentFile) {
+    return undefined;
+  }
 
-type TextDeltaEvent = {
-  type: "message_update";
-  assistantMessageEvent?: {
-    type?: string;
-    delta?: unknown;
-  };
-};
-
-type MessageEvent = {
-  type: "message";
-  message?: {
-    content?: unknown;
-  };
-};
-
-type PiJsonEvent = TextDeltaEvent | MessageEvent | JsonRecord;
-
-const isRecord = (value: unknown): value is JsonRecord =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
-
-const parseJsonLine = (line: string): PiJsonEvent | undefined => {
-  if (!line.trim()) return undefined;
+  const leafId = ctx.sessionManager.getLeafId();
+  if (!leafId) {
+    return undefined;
+  }
 
   try {
-    const parsed: unknown = JSON.parse(line);
-    return isRecord(parsed) ? (parsed as PiJsonEvent) : undefined;
+    const parentSession = SessionManager.open(parentFile);
+    return parentSession.createBranchedSession(leafId) ?? undefined;
   } catch {
     return undefined;
   }
 };
 
-const makeSessionFile = (): string => {
-  fs.mkdirSync(SESSION_DIR, { recursive: true });
-  return path.join(SESSION_DIR, `leader-${Date.now()}-${process.pid}-${randomUUID()}.jsonl`);
-};
+// ── Global Tracker Instance ─────────────────────────────────────────────────
 
-const modelArg = ({ model }: ExtensionContext): string | undefined =>
-  model?.provider && model.id ? `${model.provider}/${model.id}` : undefined;
+const tracker = new LeaderTracker();
 
-const truncateResult = (text: string): string =>
-  text.length <= MAX_RESULT_CHARS
-    ? text
-    : `${text.slice(0, MAX_RESULT_CHARS)}\n\n... [leader output truncated at ${MAX_RESULT_CHARS} chars]`;
-
-const extractTextFromContent = (content: unknown): string => {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-
-  return content
-    .map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : ""))
-    .join("");
-};
-
-type ExtractedEventText = {
-  text: string;
-  source: "delta" | "message";
-};
-
-const extractTextFromEventLine = (line: string): ExtractedEventText | undefined => {
-  const event = parseJsonLine(line);
-  if (!event) return undefined;
-
-  if (event.type === "message_update") {
-    const update = (event as TextDeltaEvent).assistantMessageEvent;
-    return update?.type === "text_delta" && typeof update.delta === "string"
-      ? { text: update.delta, source: "delta" }
-      : undefined;
-  }
-
-  if (event.type === "message") {
-    const text = extractTextFromContent((event as MessageEvent).message?.content);
-    return text ? { text, source: "message" } : undefined;
-  }
-
-  return undefined;
-};
-
-const buildLeaderArgs = (
-  task: string,
-  ctx: ExtensionContext,
-  mode: LeaderSessionMode,
-  sessionFile?: string,
-): string[] => {
-  const sessionArgs =
-    mode === "persistent" && sessionFile ? ["--session", sessionFile] : ["--no-session"];
-
-  const args = [
-    "--mode",
-    "json",
-    "-p",
-    ...sessionArgs,
-    "--no-extensions",
-    "--tools",
-    LEADER_TOOLS.join(",") satisfies string,
-  ];
-
-  const selectedModel = modelArg(ctx);
-  return selectedModel
-    ? [...args, "--model", selectedModel, `Task: ${task}`]
-    : [...args, `Task: ${task}`];
-};
-
-const appendParsedLines = (
-  buffer: string,
-  chunks: string[],
-  state: { hasDelta: boolean },
-): string => {
-  const lines = buffer.split("\n");
-  const remainder = lines.pop() ?? "";
-
-  for (const line of lines) {
-    const extracted = extractTextFromEventLine(line);
-    if (!extracted) continue;
-    if (extracted.source === "delta") state.hasDelta = true;
-    if (extracted.source === "message" && state.hasDelta) continue;
-    chunks.push(extracted.text);
-  }
-
-  return remainder;
-};
-
-const formatLeaderResult = ({
-  exitCode,
-  signal,
-  mode,
-  sessionFile,
-  output,
-}: LeaderRunResult): string => {
-  const status = signal
-    ? `cancelled by signal ${signal}`
-    : exitCode === 0
-      ? "completed"
-      : `exited with code ${exitCode}`;
-  const sessionLine = sessionFile ? `\nSession: ${sessionFile}` : "";
-  return `Leader ${status}.\nMode: ${mode}${sessionLine}\n\n${output}`;
-};
-
-const parseLeaderCommandInput = (args: string | undefined): LeaderCommandInput | string => {
-  const tokens = args?.trim().split(/\s+/).filter(Boolean) ?? [];
-  const hasPersistent = tokens.includes("--persistent");
-  const hasEphemeral = tokens.includes("--ephemeral");
-
-  if (hasPersistent && hasEphemeral) {
-    return "Use only one mode flag: --ephemeral or --persistent";
-  }
-
-  const mode: LeaderSessionMode = hasPersistent ? "persistent" : DEFAULT_SESSION_MODE;
-  const task = tokens
-    .filter((token) => token !== "--persistent" && token !== "--ephemeral")
-    .join(" ")
-    .trim();
-
-  if (!task) return "Usage: /leader [--ephemeral|--persistent] <task>";
-
-  return { task, mode: hasEphemeral ? "ephemeral" : mode };
-};
+type OnUpdateCallback = (partial: {
+  content: Array<{ type: "text"; text: string }>;
+  details: LeaderSingleResult;
+}) => void;
 
 const runLeader = async (
   task: string,
   ctx: ExtensionContext,
+  agent: LeaderAgentConfig,
+  mode: LeaderSessionMode,
   signal?: AbortSignal,
-  mode: LeaderSessionMode = DEFAULT_SESSION_MODE,
-): Promise<LeaderRunResult> => {
-  const sessionFile = mode === "persistent" ? makeSessionFile() : undefined;
-  const args = buildLeaderArgs(task, ctx, mode, sessionFile);
+  onUpdate?: OnUpdateCallback,
+): Promise<LeaderSingleResult> => {
+  // ── Track spawning ──────────────────────────────────────────────────────
+  const entryId = tracker.add(agent.name, task, mode);
 
-  return await new Promise<LeaderRunResult>((resolve, reject) => {
+  // ── Session setup ──────────────────────────────────────────────────────
+  let sessionFile: string | undefined;
+  let forkError: string | undefined;
+
+  if (mode === "fork") {
+    const forkedPath = createForkedSessionFile(ctx);
+    if (!forkedPath) {
+      forkError =
+        "Cannot fork: parent session has no persisted file or no entries. Use persistent or ephemeral mode instead.";
+    } else {
+      sessionFile = forkedPath;
+    }
+  } else if (mode === "persistent") {
+    sessionFile = makeSessionFile();
+  }
+
+  // ── Handle fork failure → fall back to ephemeral ───────────────────────
+  if (forkError && !sessionFile) {
+    // Fork failed; mark tracker entry as failed and return error result
+    tracker.markFailed(entryId, 1);
+    return {
+      agent: agent.name,
+      agentSource: agent.source,
+      task,
+      exitCode: 1,
+      signal: null,
+      mode,
+      sessionFile: undefined,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        contextTokens: 0,
+        turns: 0,
+      },
+      displayItems: [],
+      finalOutput: forkError,
+      stderr: "",
+    };
+  }
+
+  // ── System prompt ──────────────────────────────────────────────────────
+  let tmpPromptDir: string | null = null;
+  let tmpPromptPath: string | null = null;
+
+  if (agent.systemPrompt.trim()) {
+    const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
+    tmpPromptDir = tmp.dir;
+    tmpPromptPath = tmp.filePath;
+  }
+
+  // ── Spawn child ───────────────────────────────────────────────────────
+  const args = buildLeaderArgs(task, ctx, agent, mode, sessionFile, tmpPromptPath);
+
+  const streamState = createStreamParseState();
+
+  const result: LeaderSingleResult = {
+    agent: agent.name,
+    agentSource: agent.source,
+    task,
+    exitCode: 0,
+    signal: null,
+    mode,
+    sessionFile,
+    usage: { ...streamState.usage },
+    displayItems: [],
+    finalOutput: "",
+    stderr: "",
+  };
+
+  const emitUpdate = () => {
+    if (!onUpdate) return;
+    result.displayItems = [...streamState.displayItems];
+    result.finalOutput = getFinalOutput(streamState) || "(running...)";
+    result.usage = { ...streamState.usage };
+    result.model = streamState.model;
+    result.stopReason = streamState.stopReason;
+    result.errorMessage = streamState.errorMessage;
+    // turns is already inside result.usage via the spread above
+
+    onUpdate({
+      content: [{ type: "text", text: result.finalOutput }],
+      details: { ...result, displayItems: [...result.displayItems] },
+    });
+  };
+
+  // ── Mark running once child is about to spawn ─────────────────────────
+  tracker.markRunning(entryId);
+
+  return await new Promise<LeaderSingleResult>((resolve, reject) => {
     const proc = spawn("pi", args, {
       cwd: ctx.cwd,
       env: { ...process.env, [CHILD_ENV]: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    const chunks: string[] = [];
-    const streamState = { hasDelta: false };
     let stdoutBuffer = "";
     let stderrBuffer = "";
     let settled = false;
 
-    const cleanup = (): void => signal?.removeEventListener("abort", abort);
+    const cleanup = (): void => {
+      signal?.removeEventListener("abort", abort);
+      cleanupTempFile(tmpPromptDir, tmpPromptPath);
+    };
+
     const settle = <T>(callback: () => T): T | undefined => {
       cleanup();
       if (settled) return undefined;
       settled = true;
       return callback();
     };
+
     const abort = (): void => {
       if (proc.exitCode === null) proc.kill("SIGTERM");
+      tracker.markCancelled(entryId);
     };
 
     signal?.addEventListener("abort", abort, { once: true });
 
     proc.stdout.setEncoding("utf8");
     proc.stdout.on("data", (chunk: string) => {
-      stdoutBuffer = appendParsedLines(stdoutBuffer + chunk, chunks, streamState);
+      stdoutBuffer = processStreamChunk(stdoutBuffer, chunk, streamState);
+      emitUpdate();
     });
 
     proc.stderr.setEncoding("utf8");
@@ -233,76 +214,444 @@ const runLeader = async (
     });
 
     proc.on("error", (error) => {
+      tracker.markFailed(entryId, 1);
       settle(() => reject(error));
     });
 
     proc.on("close", (code, closeSignal) => {
       settle(() => {
-        const finalExtracted = extractTextFromEventLine(stdoutBuffer);
-        if (finalExtracted && !(finalExtracted.source === "message" && streamState.hasDelta)) {
-          chunks.push(finalExtracted.text);
+        // Process any remaining buffer
+        if (stdoutBuffer.trim()) {
+          processStreamChunk("", "\n", streamState);
         }
 
-        const output = chunks.join("").trim();
-        const stderr = stderrBuffer.trim();
-        const combined = [output, stderr ? `\n\n[stderr]\n${stderr}` : ""].join("").trim();
+        result.exitCode = code ?? 0;
+        result.signal = closeSignal;
+        result.displayItems = [...streamState.displayItems];
+        result.finalOutput = getFinalOutput(streamState);
+        result.usage = { ...streamState.usage };
+        result.model = streamState.model;
+        result.stopReason = streamState.stopReason;
+        result.errorMessage = streamState.errorMessage;
+        result.stderr = stderrBuffer.trim();
 
-        resolve({
-          output: truncateResult(combined || "(leader produced no text output)"),
-          mode,
-          ...(sessionFile ? { sessionFile } : {}),
-          exitCode: code,
-          signal: closeSignal,
-        });
+        // ── Tracker: mark terminal state ────────────────────────────
+        const exitCode = code ?? 0;
+        const wasAborted = closeSignal != null;
+        if (wasAborted) {
+          tracker.markCancelled(entryId);
+        } else if (exitCode === 0) {
+          tracker.markCompleted(entryId, exitCode);
+        } else {
+          tracker.markFailed(entryId, exitCode);
+        }
+
+        resolve(result);
       });
     });
   });
 };
 
+// ── Agent Discovery ──────────────────────────────────────────────────────────
+
+import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import type { LeaderAgentDiscoveryResult } from "./src/types.js";
+
+const USER_AGENTS_DIR = () => path.join(getAgentDir(), "leaders");
+
+const loadAgentsFromDir = (
+  dir: string,
+  source: LeaderAgentConfig["source"],
+): { agents: LeaderAgentConfig[]; errors: Array<{ path: string; error: string }> } => {
+  const agents: LeaderAgentConfig[] = [];
+  const errors: Array<{ path: string; error: string }> = [];
+
+  if (!fs.existsSync(dir)) return { agents, errors };
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return { agents, errors };
+  }
+
+  for (const entry of entries) {
+    if (!entry.name.endsWith(".md")) continue;
+    if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+
+    const filePath = path.join(dir, entry.name);
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, "utf-8");
+    } catch (err) {
+      errors.push({ path: filePath, error: String(err) });
+      continue;
+    }
+
+    const { frontmatter, body } = parseFrontmatter<Record<string, string>>(content);
+
+    if (!frontmatter.name || !frontmatter.description) continue;
+
+    const tools = frontmatter.tools
+      ?.split(",")
+      .map((t: string) => t.trim())
+      .filter(Boolean);
+
+    agents.push({
+      name: frontmatter.name,
+      description: frontmatter.description,
+      tools: tools && tools.length > 0 ? tools : undefined,
+      model: frontmatter.model,
+      systemPrompt: body,
+      systemPromptMode: (frontmatter.systemPromptMode as "replace" | "append") ?? "replace",
+      inheritProjectContext: frontmatter.inheritProjectContext === "true",
+      inheritSkills: frontmatter.inheritSkills === "true",
+      sessionMode: (frontmatter.sessionMode as LeaderSessionMode) ?? "ephemeral",
+      source,
+      filePath,
+    });
+  }
+
+  return { agents, errors };
+};
+
+const discoverLeaderAgents = (_cwd: string): LeaderAgentDiscoveryResult => {
+  // Built-in agents from the extension's agents/ directory
+  const builtinDir = path.join(__dirname, "agents");
+  const builtinResult = loadAgentsFromDir(builtinDir, "builtin");
+
+  // User agents from ~/.pi/agent/leaders/
+  const userDir = USER_AGENTS_DIR();
+  const userResult = loadAgentsFromDir(userDir, "user");
+
+  // Priority: user > builtin > default
+  const agentMap = new Map<string, LeaderAgentConfig>();
+
+  // Default agent always available
+  agentMap.set(DEFAULT_AGENT.name, DEFAULT_AGENT);
+
+  // Built-in agents override default on name collision
+  for (const agent of builtinResult.agents) {
+    agentMap.set(agent.name, agent);
+  }
+
+  // User agents override everything
+  for (const agent of userResult.agents) {
+    agentMap.set(agent.name, agent);
+  }
+
+  return {
+    agents: Array.from(agentMap.values()),
+    errors: [...builtinResult.errors, ...userResult.errors],
+  };
+};
+
+// ── Slash Command Parser ────────────────────────────────────────────────────
+
+const SESSION_FLAGS = ["--ephemeral", "--persistent", "--fork"] as const;
+
+interface LeaderCommandInput {
+  task: string;
+  mode: LeaderSessionMode;
+  agent?: string;
+}
+
+const parseLeaderCommand = (args: string | undefined): LeaderCommandInput | string => {
+  const tokens = args?.trim().split(/\s+/).filter(Boolean) ?? [];
+
+  const flags = tokens.filter((t) => t.startsWith("--"));
+  const nonFlags = tokens.filter((t) => !t.startsWith("--") && !t.startsWith("@"));
+
+  // Parse agent @mentions: @scout, @planner, etc.
+  const agentMentions = tokens.filter((t) => t.startsWith("@"));
+  const agentName = agentMentions.length > 0 ? agentMentions[0].slice(1) : undefined;
+
+  // Parse mode flags
+  const modes = flags.filter((f) => SESSION_FLAGS.includes(f as (typeof SESSION_FLAGS)[number]));
+  if (modes.length > 1) return "Use only one mode flag: --ephemeral, --persistent, or --fork";
+
+  let mode: LeaderSessionMode = "ephemeral";
+  if (modes.length === 1) {
+    if (modes[0] === "--persistent") mode = "persistent";
+    else if (modes[0] === "--fork") mode = "fork";
+    else mode = "ephemeral";
+  }
+
+  const task = nonFlags.join(" ").trim();
+  if (!task) return "Usage: /leader [--ephemeral|--persistent|--fork] [@agent] <task>";
+
+  return { task, mode, agent: agentName };
+};
+
+// ── Resolve Agent ────────────────────────────────────────────────────────────
+
+const resolveAgent = (
+  agentName: string | undefined,
+  discovery: LeaderAgentDiscoveryResult,
+): LeaderAgentConfig | string => {
+  if (!agentName) return DEFAULT_AGENT;
+
+  const found = discovery.agents.find((a) => a.name === agentName);
+  if (!found) {
+    const available = discovery.agents.map((a) => a.name).join(", ");
+    return `Unknown agent "${agentName}". Available: ${available}`;
+  }
+
+  return found;
+};
+
+// ── Extension ────────────────────────────────────────────────────────────────
+
+const WIDGET_KEY = "leaders";
+
+/** Update the leaders widget from current tracker state. */
+const updateWidget = (ctx: ExtensionContext): void => {
+  const entries = tracker.getAll();
+  const lines = renderLeadersWidget(entries, ctx.ui.theme);
+  ctx.ui.setWidget(WIDGET_KEY, lines, { placement: "aboveEditor" });
+};
+
 const leadersExtension = (pi: ExtensionAPI): void => {
+  // ── Widget: re-render on tracker state changes ───────────────────────────
+  // We store the latest ExtensionContext so the tracker callback can update
+  // the widget even during streaming (no active event handler context).
+  let latestCtx: ExtensionContext | null = null;
+
+  tracker.onUpdate(() => {
+    if (!latestCtx) return;
+    updateWidget(latestCtx);
+  });
+
+  // ── Tool registration ───────────────────────────────────────────────────
   pi.registerTool({
     name: "leader",
     label: "Leader",
-    description:
-      "Delegate one foreground task to a focused leader subagent. Use ephemeral mode by default for one-shot tasks where only the final answer matters, such as codebase exploration, API research, documentation reading, validation reviews, quick inspection, summarization, direct Q&A, or isolated second opinions. Use persistent mode only when the leader session should be saved for follow-up, continuity, important multi-step work, iterative review, future continuation, or audit/debugging. If unsure, choose ephemeral.",
+    description: [
+      "Delegate one foreground task to a focused leader subagent.",
+      "",
+      "Modes:",
+      "  - ephemeral (default): one-shot, no saved session. Best for exploration, research, reviews, Q&A.",
+      "  - persistent: saved session for follow-up, continuity, or audit.",
+      "  - fork: branch from parent context. Best for context-aware tasks like continuing a discussion.",
+      "",
+      "Agents: Use the 'list' action to discover available agent profiles, or omit agent for the default.",
+    ].join("\n"),
+    promptSnippet:
+      "Delegate tasks to specialized leader subagents (scout, planner, worker, reviewer, oracle)",
+    promptGuidelines: [
+      "Use leader to delegate focused tasks that benefit from isolated context or a specialized agent profile.",
+      "Use leader with agent 'scout' for fast codebase exploration, 'planner' for read-only plans, 'reviewer' for code review, 'oracle' for research and Q&A, 'worker' for implementation.",
+      "Use leader when a task would benefit from a clean context window rather than the full conversation history.",
+      "Use leader with mode 'ephemeral' for one-shot tasks and 'fork' when the subagent needs parent conversation context.",
+      "When a user message contains multiple independent tasks, delegate each to a separate leader call rather than handling them sequentially yourself.",
+      "Always call leader with action 'list' first to check available agents and pick the best one for the task.",
+    ],
     parameters: Type.Object({
-      task: Type.String({ description: "The complete task for the leader subagent to perform." }),
+      task: Type.Optional(
+        Type.String({ description: "The complete task for the leader to perform." }),
+      ),
       mode: Type.Optional(
         Type.Union([
           Type.Literal("ephemeral", {
             description:
-              "Default. Do not save the child session. Best for one-shot delegation where only the answer matters: codebase exploration, API research, documentation reading, validation reviews, quick inspection, summarization, direct Q&A, or isolated second opinions.",
+              "One-shot, no saved session. Best for exploration, research, reviews, Q&A.",
           }),
           Type.Literal("persistent", {
+            description: "Saved session for follow-up, continuity, or audit.",
+          }),
+          Type.Literal("fork", {
             description:
-              "Save the child session. Use when the leader conversation should persist for follow-up, continuity, important multi-step work, iterative review, future continuation, or audit/debugging.",
+              "Branch from parent context. Best for context-aware tasks like continuing a discussion.",
           }),
         ]),
       ),
+      agent: Type.Optional(
+        Type.String({
+          description: "Agent profile name. Use 'list' action to discover available agents.",
+        }),
+      ),
+      action: Type.Optional(
+        Type.Union([
+          Type.Literal("run", { description: "Run a leader (default)." }),
+          Type.Literal("list", { description: "List available agent profiles." }),
+          Type.Literal("status", { description: "Check status of an async leader run." }),
+        ]),
+      ),
+      async: Type.Optional(
+        Type.Boolean({
+          description: "Run leader in the background. Returns run ID immediately.",
+        }),
+      ),
+      id: Type.Optional(
+        Type.String({
+          description: "Run ID for status queries (from a previous async run).",
+        }),
+      ),
     }),
-    execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
-      const result = await runLeader(params.task, ctx, signal, params.mode ?? DEFAULT_SESSION_MODE);
+    execute: async (_toolCallId, params, signal, onUpdate, ctx) => {
+      const discovery = discoverLeaderAgents(ctx.cwd);
+
+      // ── List action ────────────────────────────────────────────────────
+      if (params.action === "list") {
+        const lines = discovery.agents.map((a) => {
+          const sourceTag = a.source === "builtin" ? "" : ` (${a.source})`;
+          const toolList = a.tools?.join(", ") ?? "default";
+          return `- **${a.name}**${sourceTag}: ${a.description} [tools: ${toolList}]`;
+        });
+        return {
+          content: [{ type: "text", text: `Available leader agents:\n\n${lines.join("\n")}` }],
+          details: { agents: discovery.agents },
+        };
+      }
+
+      // ── Status action ──────────────────────────────────────────────
+      if (params.action === "status") {
+        if (params.id) {
+          const run = readAsyncStatus(params.id);
+          if (!run) {
+            return {
+              content: [{ type: "text", text: `No async run found with ID ${params.id}.` }],
+              details: {},
+            };
+          }
+          return {
+            content: [{ type: "text", text: formatAsyncStatus(run) }],
+            details: { run },
+          };
+        }
+        // List all async runs
+        const runs = listAsyncRuns();
+        if (runs.length === 0) {
+          return { content: [{ type: "text", text: "No async leader runs." }], details: {} };
+        }
+        const lines = runs.map((r) => {
+          const icon =
+            r.status === "completed"
+              ? "✓"
+              : r.status === "failed"
+                ? "✗"
+                : r.status === "running"
+                  ? "⏳"
+                  : "⊘";
+          return `${icon} ${r.id.slice(0, 8)} ${r.agent} ${r.status} — ${r.task.slice(0, 50)}`;
+        });
+        return {
+          content: [{ type: "text", text: `Async leader runs:\n\n${lines.join("\n")}` }],
+          details: { runs },
+        };
+      }
+
+      // ── Run action ────────────────────────────────────────
+      const task = params.task;
+      if (!task) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Provide a task to delegate. Usage: leader({ task: '...', mode: 'ephemeral', agent: 'scout' })",
+            },
+          ],
+          details: {},
+        };
+      }
+
+      const resolved = resolveAgent(params.agent, discovery);
+      if (typeof resolved === "string") {
+        return { content: [{ type: "text", text: resolved }], details: {} };
+      }
+
+      const agent = resolved;
+      const mode: LeaderSessionMode = params.mode ?? agent.sessionMode ?? "ephemeral";
+
+      // ── Async or foreground execution ──────────────────────────────
+      if (params.async) {
+        const asyncRun = await spawnAsyncLeader(task, ctx, agent, mode);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Leader started in background.\nID: ${asyncRun.id}\nAgent: ${asyncRun.agent}\nMode: ${asyncRun.mode}\nStatus: ${asyncRun.status}\n\nCheck status with: leader({ action: "status", id: "${asyncRun.id}" })`,
+            },
+          ],
+          details: { run: asyncRun },
+        };
+      }
+
+      const result = await runLeader(task, ctx, agent, mode, signal, onUpdate);
 
       return {
         content: [{ type: "text", text: formatLeaderResult(result) }],
         details: result,
       };
     },
+
+    renderCall(args, theme) {
+      const agentName = args.agent || "default";
+      return new Text(
+        theme.fg("toolTitle", theme.bold("leader ")) + theme.fg("accent", agentName),
+        0,
+        0,
+      );
+    },
+
+    renderResult(result, { isPartial }, theme) {
+      const details = result.details;
+
+      // Still running — widget shows live status
+      if (isPartial) {
+        return new Text(theme.fg("warning", "⏳"), 0, 0);
+      }
+
+      // Not a leader run result (list/status actions) — plain text fallback
+      if (!details || typeof details !== "object" || !("exitCode" in details)) {
+        const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+        const preview = text.length > 150 ? `${text.slice(0, 150)}…` : text;
+        return new Text(theme.fg("muted", preview), 0, 0);
+      }
+
+      const leader = details as LeaderSingleResult;
+      const isOk =
+        leader.exitCode === 0 && leader.stopReason !== "error" && leader.stopReason !== "aborted";
+
+      const icon = isOk ? theme.fg("success", "✓") : theme.fg("error", "✗");
+      const agent = theme.fg("accent", leader.agent);
+      const usage = formatUsageStats(leader.usage, leader.model);
+
+      if (!isOk) {
+        const exitInfo = leader.signal ? `signal ${leader.signal}` : `exit ${leader.exitCode}`;
+        return new Text(
+          `${icon} ${agent} · ${theme.fg("error", exitInfo)} · ${theme.fg("dim", usage)}`,
+          0,
+          0,
+        );
+      }
+
+      return new Text(`${icon} ${agent} · ${theme.fg("dim", usage)}`, 0, 0);
+    },
   });
 
+  // ── Command registration ─────────────────────────────────────────────────
   pi.registerCommand("leader", {
     description:
-      "Run one foreground leader subagent. Defaults to ephemeral/no-session for one-shot tasks. Use --persistent when the child session should be saved for follow-up, continuity, or important multi-step work.",
+      "Run a foreground leader subagent. Defaults to ephemeral. Use @agent to pick a profile.",
     handler: async (args, ctx) => {
-      const input = parseLeaderCommandInput(args);
+      const input = parseLeaderCommand(args);
       if (typeof input === "string") {
         ctx.ui.notify(input, "error");
         return;
       }
 
-      ctx.ui.notify(`Leader started (${input.mode})...`, "info");
+      const discovery = discoverLeaderAgents(ctx.cwd);
+      const resolved = resolveAgent(input.agent, discovery);
+      if (typeof resolved === "string") {
+        ctx.ui.notify(resolved, "error");
+        return;
+      }
+
+      const agent = resolved;
+      ctx.ui.notify(`Leader started — ${agent.name} (${input.mode})...`, "info");
       try {
-        const result = await runLeader(input.task, ctx, ctx.signal, input.mode);
+        const result = await runLeader(input.task, ctx, agent, input.mode, ctx.signal);
         pi.sendMessage(
           {
             customType: "leader-result",
@@ -318,9 +667,57 @@ const leadersExtension = (pi: ExtensionAPI): void => {
     },
   });
 
+  // ── Inject agent roster into system prompt on first turn ─────────────────
+  let rosterInjected = false;
+
+  pi.on("before_agent_start", async (event, ctx) => {
+    if (process.env[CHILD_ENV] === "1") return;
+    if (rosterInjected) return;
+
+    const discovery = discoverLeaderAgents(ctx.cwd);
+    if (discovery.agents.length === 0) return;
+
+    rosterInjected = true;
+
+    const agentLines = discovery.agents
+      .map((a) => {
+        const tools = a.tools?.length ? ` [tools: ${a.tools.join(", ")}]` : "";
+        return `  - ${a.name}: ${a.description}${tools}`;
+      })
+      .join("\n");
+
+    return {
+      systemPrompt:
+        event.systemPrompt +
+        `\n\n## Leader Agents\n\nAvailable leader subagents:\n${agentLines}\n\nUse leader({ action: "list" }) for full details including modes and sources.`,
+    };
+  });
+
+  // ── Session lifecycle ────────────────────────────────────────────────────
   pi.on("session_start", async (_event, ctx) => {
     if (process.env[CHILD_ENV] === "1") return;
+    latestCtx = ctx;
+    rosterInjected = false;
+    cleanupOldAsyncRuns();
+    tracker.clear();
+    updateWidget(ctx);
     ctx.ui.notify("Leaders extension loaded", "info");
+  });
+
+  // ── Prune completed entries after each turn ────────────────────────────────
+  pi.on("turn_end", async (_event, ctx) => {
+    if (process.env[CHILD_ENV] === "1") return;
+    latestCtx = ctx;
+    tracker.pruneCompleted();
+    updateWidget(ctx);
+  });
+
+  // ── Also update on agent end (final cleanup) ──────────────────────────────
+  pi.on("agent_end", async (_event, ctx) => {
+    if (process.env[CHILD_ENV] === "1") return;
+    latestCtx = ctx;
+    tracker.pruneCompleted();
+    updateWidget(ctx);
   });
 };
 
