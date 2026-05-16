@@ -1,138 +1,160 @@
 # pi-leaders
 
-Private Pi extension for foreground leader subagents.
+Leader subagents for Pi — delegate focused tasks to child Pi processes with isolated context.
 
-Leaders are focused child Pi processes that the parent session can delegate work to. This first version is intentionally small so we can learn the mechanics before adding background mode, named specialists, widgets, continuation, or parallelism.
+## Features
+
+- **Agent profiles**: Named specialists (scout, planner, reviewer, worker, oracle) with custom system prompts, tools, and models
+- **Session modes**: Ephemeral (default), persistent (saved), and fork (branch from parent context)
+- **Structured results**: Full usage stats, tool calls, model info, stop reasons — not just text
+- **Async/background**: Run leaders in the background while the parent continues working
+- **Live streaming**: Real-time progress updates during foreground runs
 
 ## Usage
 
 ### Tool
 
-Ask Pi naturally, for example:
-
-```text
-Use a leader to inspect this repository and summarize the extension structure.
-```
-
-The parent agent can call the `leader` tool with:
+Ask Pi naturally, or call the `leader` tool directly:
 
 ```json
-{ "task": "Inspect this repository and summarize the extension structure." }
+{ "task": "Inspect this repository and summarize the auth middleware." }
 ```
 
-By default, leader runs are **ephemeral** and do not save a child session. This is right for most delegated tasks because they are one-shot and only the final answer matters. Request a **persistent** session when the leader conversation should be kept for follow-up or important continuity:
+```json
+{ "task": "Review this diff for correctness", "agent": "reviewer" }
+```
 
 ```json
-{
-  "task": "Review this plan and keep context for a later follow-up.",
-  "mode": "persistent"
-}
+{ "task": "Continue this refactor", "mode": "fork", "agent": "worker" }
+```
+
+```json
+{ "task": "Run background analysis", "agent": "scout", "async": true }
+```
+
+```json
+{ "action": "list" }
+```
+
+```json
+{ "action": "status" }
+```
+
+```json
+{ "action": "status", "id": "abc123..." }
 ```
 
 ### Slash command
 
-```text
-/leader inspect this repository and summarize the extension structure
+```
+/leader inspect this repository
+/leader --persistent @reviewer review this plan
+/leader --fork @worker continue this refactor
 ```
 
-Explicit session modes:
+## Agent Profiles
 
-```text
-/leader --ephemeral check the docs for this library
-/leader --persistent review this implementation plan
+| Agent      | Purpose                            | Model             | Tools                      |
+| ---------- | ---------------------------------- | ----------------- | -------------------------- |
+| `default`  | General-purpose (no system prompt) | Parent model      | read, bash, grep, find, ls |
+| `scout`    | Fast codebase recon                | claude-haiku-4-5  | read, grep, find, ls, bash |
+| `planner`  | Implementation plans (read-only)   | claude-sonnet-4-5 | read, grep, find, ls       |
+| `reviewer` | Code review                        | claude-sonnet-4-5 | read, grep, find, ls, bash |
+| `worker`   | Full implementation                | claude-sonnet-4-5 | all defaults               |
+| `oracle`   | Second opinion (no edits)          | claude-sonnet-4-5 | read, grep, find, ls       |
+
+### Custom agents
+
+Create `.md` files in `~/.pi/agent/leaders/` with YAML frontmatter:
+
+```markdown
+---
+name: my-agent
+description: What this agent does
+tools: read, grep, find, ls
+model: claude-haiku-4-5
+systemPromptMode: replace
+inheritProjectContext: false
+inheritSkills: false
+sessionMode: ephemeral
+---
+
+Your system prompt goes here.
 ```
 
-## Choosing a session mode
+User agents override built-in agents with the same name.
 
-### Use ephemeral by default
+## Session Modes
 
-Ephemeral mode uses `--no-session`. It is best for one-shot delegation where only the final answer matters.
+### Ephemeral (default)
 
-Examples:
+No saved session. Best for one-shot tasks: exploration, research, reviews, Q&A.
 
-- codebase exploration: “Find where the auth middleware is wired.”
-- API research: “Check how the GitHub CLI exposes release metadata.”
-- documentation reading: “Read the current Hono docs for route groups.”
-- validation reviews: “Review this small change for obvious bugs.”
-- quick inspection: “Look at this config and tell me what it does.”
-- summarization: “Summarize the extension structure.”
-- direct Q&A: “Does this TypeScript type preserve literals?”
-- isolated second opinion: “Challenge this approach once.”
+### Persistent
 
-### Use persistent intentionally
+Saves session to `~/.pi/agent/sessions/leaders/`. Use for follow-up, continuity, or audit trails.
 
-Persistent mode uses `--session` and saves the child conversation under `~/.pi/agent/sessions/leaders/`. Use it when the leader thread itself is important and may need to continue.
+### Fork
 
-Examples:
+Branches from the parent's current conversation. The leader inherits full context. Best for context-aware tasks: continuing a discussion, reviewing in-context code, building on a plan.
 
-- follow-up sessions: “Keep this leader around; we’ll continue later.”
-- important planning: “Plan this migration and preserve the reasoning.”
-- iterative review: “Act as reviewer for this feature across multiple passes.”
-- specialist continuity: “Stay as the architecture leader for this refactor.”
-- audit/debugging: “Save the session so I can inspect how the conclusion was reached.”
+## Background/Async
+
+Add `async: true` to run in the background:
+
+```json
+{ "task": "Analyze the codebase architecture", "agent": "scout", "async": true }
+```
+
+Returns a run ID immediately. Check status:
+
+```json
+{ "action": "status", "id": "abc123..." }
+```
+
+List all async runs:
+
+```json
+{ "action": "status" }
+```
+
+## Architecture
+
+```
+extensions/leaders/
+  index.ts              # Extension entry point
+  agents/               # Built-in agent .md profiles
+    scout.md
+    planner.md
+    reviewer.md
+    worker.md
+    oracle.md
+  src/
+    types.ts            # All type definitions
+    stream-parser.ts    # JSON event stream parsing
+    format.ts           # Result formatting and display
+    spawn-builder.ts    # CLI arg builder (shared by sync/async)
+    async.ts            # Background execution and status tracking
+    utils.ts            # Paths, temp files, constants
+```
 
 ## What happens
 
-1. The extension chooses a session mode.
-2. It spawns a child Pi process in JSON mode.
-3. The child runs with extensions disabled and a small tool allowlist.
-4. The extension parses streamed JSON output.
-5. The parent receives the leader result after the child exits.
+1. The extension resolves the agent profile (or defaults to no system prompt)
+2. It builds CLI args with the right session mode, tools, model, and system prompt
+3. It spawns a `pi --mode json -p` child process
+4. For foreground: streams events and returns structured result
+5. For background: detaches the child and writes status to filesystem
 
-Ephemeral child command shape:
+Forked sessions use `SessionManager.open(parentFile).createBranchedSession(leafId)` to create a real session branch.
 
-```bash
-pi --mode json -p \
-  --no-session \
-  --no-extensions \
-  --tools read,bash,grep,find,ls \
-  --model <current-provider>/<current-model> \
-  "Task: <task>"
-```
+## Security
 
-Persistent child command shape:
+- Child processes run with `--no-extensions` (no inherited extensions)
+- `PI_LEADERS_CHILD=1` environment variable marks child processes
+- Forked context: children cannot call the `leader` tool (no extensions)
+- Project-local agents require confirmation (not yet implemented in leaders)
 
-```bash
-pi --mode json -p \
-  --session ~/.pi/agent/sessions/leaders/<session>.jsonl \
-  --no-extensions \
-  --tools read,bash,grep,find,ls \
-  --model <current-provider>/<current-model> \
-  "Task: <task>"
-```
+## Development
 
-## Current scope
-
-Included:
-
-- Foreground delegation
-- `leader` tool
-- `/leader` command
-- Session modes: `ephemeral` by default, `persistent` when explicitly requested
-- Basic JSON stream parsing
-- Basic output truncation
-- Abort signal kills the child process
-
-Not included yet:
-
-- Background mode
-- Widgets
-- Named leader profiles
-- Parallel leader runs
-- Session continuation
-- Forked parent context
-- Intercom-style child-to-parent questions
-
-## Security notes
-
-This extension spawns a real `pi` process. The child receives only these builtin tools in the MVP:
-
-```text
-read,bash,grep,find,ls
-```
-
-Child extensions are disabled with `--no-extensions` to avoid accidental recursion or surprising inherited behavior.
-
-## Development notes
-
-See [`docs/learning-process.md`](docs/learning-process.md) for the learning plan and internal architecture notes.
+See [`docs/learning-process.md`](docs/learning-process.md) for architecture notes and [`docs/session-modes-plan.md`](docs/session-modes-plan.md) for the session modes design.

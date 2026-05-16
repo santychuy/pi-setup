@@ -1,272 +1,264 @@
-# Leaders session modes plan
+# Leaders — Session Modes & Expected Results
 
-Status: implemented in `extensions/leaders/index.ts`.
+This document explains the three session modes, how each one works internally, and what results look like for each.
 
-## Goal
+## Session modes at a glance
 
-Add explicit session behavior to `leaders` so a leader run can be either:
+| Mode         | CLI flag                    | Session behavior                           | When to use                                                   |
+| ------------ | --------------------------- | ------------------------------------------ | ------------------------------------------------------------- |
+| `ephemeral`  | `--no-session`              | No file saved. Child runs and exits.       | One-shot tasks: exploration, reviews, Q&A                     |
+| `persistent` | `--session <new-file>`      | New empty session file created.            | Follow-up, continuity, audit trail                            |
+| `fork`       | `--session <branched-file>` | Branch from parent's current conversation. | Context-aware tasks: continue a discussion, review in context |
 
-- **ephemeral**: one-shot delegation with no saved child conversation
-- **persistent**: delegation with a saved child session file that can be inspected or reused later
+## Ephemeral mode
 
-The recommended default is **ephemeral**. Persistence should be intentional.
-
-## Why this matters
-
-Not every subagent needs memory. Most delegated tasks are one-shot, and some leader tasks are quick and disposable:
-
-- codebase exploration
-- API research
-- documentation reading
-- validation reviews
-- inspect a narrow file or function
-- summarize a short diff
-- answer a direct implementation question
-- provide a quick second opinion
-
-For those tasks, keeping a permanent `.jsonl` session adds filesystem clutter without much value.
-
-Other leader tasks benefit from memory, continuity, and traceability:
-
-- follow-up sessions
-- important planning threads
-- long-running migration or refactor discussions
-- specialized review across multiple iterations
-- future continuation with `/leader-cont`
-- debugging how the leader reached a conclusion
-- audit trail for important decisions
-
-Those tasks should opt into a saved session.
-
-## Proposed modes
-
-### `ephemeral`
-
-Ephemeral leaders do not save a Pi session file.
-
-Child command shape:
+### How it works
 
 ```bash
 pi --mode json -p \
   --no-session \
   --no-extensions \
   --tools read,bash,grep,find,ls \
-  --model <current-provider>/<current-model> \
-  "Task: <task>"
+  --append-system-prompt /tmp/pi-leader-xxx/prompt-scout.md \
+  --model claude-haiku-4-5 \
+  "Check how the auth middleware validates tokens"
 ```
 
-Expected result header:
+No session file is created. The child process has no memory of previous runs. This is the default because most delegated tasks only need an answer.
 
-```text
-Leader completed.
+### Expected result
+
+```
+Leader ✓ scout completed.
 Mode: ephemeral
 
-<output>
+Usage: 2 turns ↑8.2k ↓1.4k R3k W200 $0.0042 claude-haiku-4-5
+
+## Files Retrieved
+1. `src/middleware/auth.ts` (lines 45-89) - Token validation logic
+2. `src/utils/jwt.ts` (lines 12-34) - JWT decode helper
+
+## Key Findings
+The auth middleware validates tokens by:
+1. Extracting Bearer token from Authorization header
+2. Calling `verifyToken()` which uses jwt.decode() with the secret
+3. Checking expiry and scope claims
+
+No session file is saved.
 ```
 
-Use this for direct, disposable tasks where the parent only needs the answer: codebase exploration, API research, documentation reading, validation reviews, quick inspection, summarization, direct Q&A, and isolated second opinions.
+### When to choose ephemeral
 
-### `persistent`
+- "Find where the auth middleware is wired"
+- "Check the docs for this library and summarize the current API"
+- "Review this small change for obvious bugs"
+- "Summarize the extension structure"
+- "Does this TypeScript type preserve literals?"
 
-Persistent leaders save a child session file under:
+## Persistent mode
 
-```text
-~/.pi/agent/sessions/leaders/
-```
-
-Child command shape:
+### How it works
 
 ```bash
 pi --mode json -p \
-  --session ~/.pi/agent/sessions/leaders/<session>.jsonl \
+  --session ~/.pi/agent/sessions/leaders/leader-1715788800000-12345-abc.jsonl \
   --no-extensions \
   --tools read,bash,grep,find,ls \
-  --model <current-provider>/<current-model> \
-  "Task: <task>"
+  --append-system-prompt /tmp/pi-leader-xxx/prompt-reviewer.md \
+  --model claude-sonnet-4-5 \
+  "Review this architecture for scalability issues"
 ```
 
-Expected result header:
+A new session file is created under `~/.pi/agent/sessions/leaders/`. The child's entire conversation is saved there. You can later re-attach or inspect it.
 
-```text
-Leader completed.
+### Expected result
+
+```
+Leader ✓ reviewer completed.
 Mode: persistent
-Session: ~/.pi/agent/sessions/leaders/<session>.jsonl
+Session: ~/.pi/agent/sessions/leaders/leader-1715788800000-12345-abc.jsonl
 
-<output>
+Usage: 4 turns ↑18.3k ↓3.7k R8k $0.0521 claude-sonnet-4-5
+
+### [Critical] — Database connection not pooled
+- **Location**: `src/db/connection.ts:23`
+- **Problem**: Creates a new connection per request
+- **Fix**: Use a connection pool with configurable max size
+
+### [Important] — No circuit breaker on external API calls
+- **Location**: `src/services/payment.ts:67`
+- **Fix**: Add retry with exponential backoff and circuit breaker
+
+✗ 2 issues found, 1 suggestion
 ```
 
-Use this when the leader's conversation may matter later: follow-up sessions, important multi-step planning, iterative review, specialist continuity, future continuation, or audit/debugging.
+### When to choose persistent
 
-## Public API
+- "Keep this leader around for follow-up questions later"
+- "Plan this migration and preserve the reasoning"
+- "Act as reviewer across multiple passes"
+- "Save the session so I can inspect how the conclusion was reached"
 
-### Tool schema
+Future: `leader({ action: "continue", id: "abc", task: "now check error handling" })` will re-attach to a persistent session.
 
-Add an optional `mode` parameter:
+## Fork mode
 
-```ts
-type LeaderSessionMode = "ephemeral" | "persistent";
+### How it works
+
+```
+1. Get parent session file from ctx.sessionManager.getSessionFile()
+2. Get parent leaf ID from ctx.sessionManager.getLeafId()
+3. SessionManager.open(parentFile).createBranchedSession(leafId)
+   → copies the entire conversation tree from root to leaf
+   → creates a new .jsonl file with the branched path
+4. Pass --session <branched-file> to the child
+
+   The child starts with ALL parent context:
+   - Every message the parent sent
+   - Every tool call and result
+   - Compaction summaries
+   - Branch summaries
+   But NO extensions (so it cannot recursively call leader)
 ```
 
-Tool call examples:
+### Expected result
+
+```
+Leader ✓ worker completed.
+Mode: fork
+Session: ~/.pi/agent/sessions/leaders/leader-fork-1715788800-12345-def.jsonl
+
+Usage: 5 turns ↑32.1k ↓4.2k R12k W1k $0.0891 claude-sonnet-4-5
+
+I've continued the refactor based on our earlier discussion. Here's what I changed:
+
+## Files Changed
+- `src/auth/middleware.ts` - Extracted token validation into a utility
+- `src/utils/token.ts` - New file with verifyToken() and decodeToken()
+
+The session file is saved for inspection.
+```
+
+### When to choose fork
+
+- "Continue this refactor with the context we discussed"
+- "Review the plan we just made, keeping our earlier decisions"
+- "Implement what we agreed on in the last few messages"
+- "Inspect the code we were just talking about"
+
+### Fork failure cases
+
+Fork returns an error result (not a crash) when:
+
+| Condition                                                                            | Error message                                                                                                |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Parent has no session file (`ctx.sessionManager.getSessionFile()` returns undefined) | "Cannot fork: parent session has no persisted file or no entries. Use persistent or ephemeral mode instead." |
+| Parent has no entries (`getLeafId()` returns undefined)                              | Same as above                                                                                                |
+| Session file doesn't exist or can't be read                                          | Same as above                                                                                                |
+
+When fork fails, the tool still returns a valid `LeaderSingleResult` with `exitCode: 1` and the error message as `finalOutput`. The parent agent can see this and decide to retry with ephemeral or persistent mode.
+
+## Async mode (background)
+
+Async is not a session mode — it's an execution mode. You can combine it with any session mode.
+
+### How it works
 
 ```json
-{
-  "task": "Check the docs for this library and summarize the current API.",
-  "mode": "ephemeral"
-}
+{ "task": "Analyze the full codebase architecture", "agent": "scout", "async": true }
 ```
+
+Returns immediately:
+
+```
+Leader started in background.
+ID: f47ac10b-58cc-4372-a567-0e02b2d3ef47
+Agent: scout
+Mode: ephemeral
+Status: running
+
+Check status with: leader({ action: "status", id: "f47ac10b..." })
+```
+
+### Checking status
 
 ```json
-{
-  "task": "Review this architecture and keep the session for future continuation.",
-  "mode": "persistent"
-}
+{ "action": "status", "id": "f47ac10b-58cc-4372-a567-0e02b2d3ef47" }
 ```
 
-Default:
+While running:
 
-```text
-ephemeral
+```
+⏳ leader scout [f47ac10b] running
+    Task: Analyze the full codebase architecture
+    Mode: ephemeral
 ```
 
-### Slash command
+After completion:
 
-Default ephemeral:
+```
+✓ leader scout [f47ac10b] completed (45.2s)
+    Task: Analyze the full codebase architecture
+    Mode: ephemeral
 
-```text
-/leader check the docs for hono routing
+    Turns: 3
+    Model: claude-haiku-4-5
+
+## Architecture
+The codebase follows a layered architecture...
 ```
 
-Explicit persistent:
+### Listing all async runs
 
-```text
-/leader --persistent review this implementation plan
+```json
+{ "action": "status" }
 ```
 
-Optional explicit ephemeral:
+```
+Async leader runs:
 
-```text
-/leader --ephemeral check the docs for hono routing
+✓ f47ac10b scout completed — Analyze the full codebase architecture
+⏳ 8b3d2a1e worker running — Implement the auth refactor
+✗ 1c9e4f32 oracle failed — Check this plan for risks
 ```
 
-## Internal type changes
+### Where async data lives
 
-Current result shape:
-
-```ts
-type LeaderRunResult = {
-  output: string;
-  sessionFile: string;
-  exitCode: number | null;
-};
+```
+~/.pi/agent/sessions/leaders/async/
+  └── <run-id>/
+      ├── status.json    → { id, agent, task, mode, status, startedAt, completedAt, exitCode, result, pid }
+      └── output.log     → raw child stdout/stderr
 ```
 
-Proposed result shape:
+Runs older than 24 hours are automatically cleaned up when a new session starts.
 
-```ts
-type LeaderSessionMode = "ephemeral" | "persistent";
+## Slash command reference
 
-type LeaderRunResult = {
-  output: string;
-  mode: LeaderSessionMode;
-  sessionFile?: string;
-  exitCode: number | null;
-};
+```
+/leader <task>                                → ephemeral, default agent
+/leader --ephemeral <task>                    → ephemeral, default agent
+/leader --persistent <task>                  → persistent, default agent
+/leader --fork <task>                         → fork, default agent
+/leader @scout <task>                         → ephemeral, scout agent
+/leader --fork @worker continue this refactor → fork, worker agent
 ```
 
-`sessionFile` only exists in persistent mode.
+## Tool parameter reference
 
-## Internal flow changes
+```json
+// Run a leader (foreground)
+{ "task": "Review this diff", "agent": "reviewer", "mode": "ephemeral" }
 
-### Current flow
+// Run in background
+{ "task": "Analyze the codebase", "agent": "scout", "async": true }
 
-```text
-runLeader(task)
-  ↓
-makeSessionFile()
-  ↓
-build args with --session <file>
-  ↓
-spawn child
+// List available agents
+{ "action": "list" }
+
+// Check all async runs
+{ "action": "status" }
+
+// Check specific async run
+{ "action": "status", "id": "abc-123" }
 ```
-
-### Proposed flow
-
-```text
-runLeader(task, mode)
-  ↓
-if persistent:
-  makeSessionFile()
-  build args with --session <file>
-else:
-  build args with --no-session
-  ↓
-spawn child
-```
-
-## Implementation plan
-
-1. Add `LeaderSessionMode` type.
-2. Add `DEFAULT_SESSION_MODE = "ephemeral"`.
-3. Update `LeaderRunResult` so `sessionFile` is optional and `mode` is required.
-4. Update `buildLeaderArgs` to receive `{ task, ctx, mode, sessionFile? }` or equivalent options.
-5. Update `runLeader` to accept `mode`.
-6. In `runLeader`, only call `makeSessionFile()` when mode is `persistent`.
-7. For ephemeral mode, pass `--no-session` instead of `--session`.
-8. Add `mode` to the `leader` tool schema.
-9. Update tool execution to default missing mode to `ephemeral`.
-10. Add slash flag parser for:
-    - `--persistent`
-    - `--ephemeral`
-11. Update result formatting to show mode and only show session path when present.
-12. Update README usage and examples.
-13. Update `learning-process.md` to describe both modes.
-14. Run `bun run check`.
-
-## Error handling and validation
-
-- Invalid tool `mode` should be prevented by the schema.
-- Slash command conflicting flags should fail early:
-
-```text
-/leader --persistent --ephemeral task
-```
-
-Recommended response:
-
-```text
-Use only one mode flag: --ephemeral or --persistent
-```
-
-- Slash command with no task should keep current behavior:
-
-```text
-Usage: /leader [--ephemeral|--persistent] <task>
-```
-
-## Future extensions enabled by this design
-
-Persistent mode prepares the ground for:
-
-- `/leader-list`
-- `/leader-cont <id> <task>`
-- named persistent leaders
-- session metadata registry
-- background persistent leaders
-
-Ephemeral mode prepares the ground for:
-
-- cheap one-shot documentation lookups
-- disposable reviewers
-- parallel quick checks without session clutter
-
-## Acceptance criteria
-
-- `leader` tool defaults to ephemeral mode.
-- `/leader <task>` defaults to ephemeral mode.
-- `mode: "persistent"` creates and reports a session file.
-- `mode: "ephemeral"` uses `--no-session` and does not report a session file.
-- `/leader --persistent <task>` creates and reports a session file.
-- `/leader --ephemeral <task>` does not report a session file.
-- Result text clearly shows the mode.
-- `bun run check` passes.

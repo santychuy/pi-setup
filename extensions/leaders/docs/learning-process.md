@@ -1,141 +1,40 @@
-# Leaders learning process
+# Leaders Learning Process
 
-This document tracks how the `leaders` extension works and how we plan to learn from it.
+> **This document is superseded.** The original learning notes are preserved below for historical context. For current architecture and implementation details, see [architecture.md](architecture.md). For session modes and expected results, see [session-modes-plan.md](session-modes-plan.md).
 
-## Purpose
+## Original Learning Notes (MVP era)
 
-`leaders` is a private experiment for understanding subagent delegation in Pi. The first version does not try to compete with full systems like `pi-subagents`. It exists to make the core flow obvious and hackable.
+### Purpose
 
-## Mental model
+`leaders` started as a minimal experiment for understanding subagent delegation in Pi. The first version was intentionally small to learn the mechanics before adding background mode, named specialists, widgets, continuation, or parallelism.
 
-A leader is a child Pi process.
+### Mental model
 
-```text
+A leader is a child Pi process:
+
+```
 Parent Pi session
   └─ leaders extension
       └─ spawn("pi", ["--mode", "json", "-p", ...])
           └─ child Pi session
 ```
 
-The parent does not create a special in-memory agent. It launches another Pi CLI process, gives it a task, reads its JSON output, and returns the result.
+The parent launches a Pi CLI process, gives it a task, reads its JSON output, and returns the result.
 
-## Foreground MVP flow
+### What we learned
 
-```text
-parent calls leader tool or /leader command
-  ↓
-leaders extension chooses ephemeral or persistent mode
-  ↓
-if persistent, it creates a session file
-  ↓
-leaders extension spawns child Pi
-  ↓
-child Pi emits JSON lines on stdout
-  ↓
-extension extracts assistant text deltas
-  ↓
-child exits
-  ↓
-extension returns the final text to parent
-```
+1. **JSON mode works well** — Pi's `--mode json` emits `message_end`, `message_update`, `tool_result_end`, and `tool_execution_*` events as newline-delimited JSON. Parsing these gives much richer data than just extracting text deltas.
 
-## Child command shape
+2. **Session files are just JSONL trees** — Pi sessions support branching via `id`/`parentId`. `SessionManager.open(file).createBranchedSession(leafId)` creates a child session that inherits the full parent context. This is how `fork` mode works.
 
-Ephemeral mode launches children with no saved session:
+3. **`--append-system-prompt` with temp files** — Agent system prompts are written to temp `.md` files and passed to the child via `--append-system-prompt`. The child's Pi instance reads the file and appends it to (or replaces) its base prompt. Temp files are cleaned up after the child exits.
 
-```bash
-pi --mode json -p \
-  --no-session \
-  --no-extensions \
-  --tools read,bash,grep,find,ls \
-  --model <current-provider>/<current-model> \
-  "Task: <task>"
-```
+4. **`--no-extensions` is essential** — Without it, child processes would load the leaders extension and could recursively spawn leaders. The `PI_LEADERS_CHILD=1` env var is a secondary guard for the future.
 
-Persistent mode launches children with a saved session:
+5. **Detached processes for async** — `spawn(..., { detached: true })` + `proc.unref()` lets the parent continue while the child runs. Results are tracked via filesystem artifacts (`status.json` + `output.log`).
 
-```bash
-pi --mode json -p \
-  --session ~/.pi/agent/sessions/leaders/<session>.jsonl \
-  --no-extensions \
-  --tools read,bash,grep,find,ls \
-  --model <current-provider>/<current-model> \
-  "Task: <task>"
-```
+6. **Agent profiles are simpler than expected** — A Markdown file with YAML frontmatter is enough. Pi's SDK provides `parseFrontmatter()` for free. The pattern is proven by pi-subagents and the built-in subagent example.
 
-## Why JSON mode matters
+### What's next
 
-`--mode json` makes the child process emit structured events instead of terminal UI output. The extension can parse those events line by line and collect assistant text.
-
-The MVP currently watches primarily for:
-
-- `message_update` events with `assistantMessageEvent.type === "text_delta"`
-- final-ish `message` content when available
-
-This can be expanded as we learn the exact event shapes we care about.
-
-## Why sessions matter
-
-Leader runs can be designed around two session modes:
-
-- **ephemeral**: no saved child session; useful for direct one-shot work
-- **persistent**: saved child session; useful when we may inspect or continue the leader later
-
-The recommended default is ephemeral because many delegated tasks only need an answer and do not need long-term conversation state.
-
-Persistent sessions are still important for future workflows:
-
-- `/leader-cont <id> <task>`
-- named session tracking
-- resume from previous leader session
-- child session inspection
-
-Important distinction:
-
-```text
-Continuing a leader later does not require the same OS process.
-It can spawn a new Pi process with the old session file.
-```
-
-See [`session-modes-plan.md`](session-modes-plan.md) for the detailed implementation plan.
-
-## Current safety boundaries
-
-The MVP intentionally limits behavior:
-
-- Foreground only: parent waits for result.
-- `--no-extensions`: child does not inherit extensions.
-- Small tool allowlist: `read,bash,grep,find,ls`.
-- `PI_LEADERS_CHILD=1`: marks child processes for future guards.
-- Abort signal handling: interruption sends `SIGTERM` to the child.
-
-## What to learn next
-
-Suggested sequence:
-
-1. Validate basic foreground child spawning.
-2. Inspect real JSON event shapes from child runs.
-3. Improve final-output extraction if needed.
-4. Add simple leader profiles, such as `reviewer`, `planner`, and `scout`.
-5. Add foreground parallel runs.
-6. Add background mode and result follow-ups.
-7. Add widgets for running leaders.
-8. Add session continuation.
-9. Consider forked parent context.
-
-## Future architecture ideas
-
-Potential future files if the extension grows:
-
-```text
-extensions/leaders/
-  index.ts
-  src/
-    spawn.ts       # child process and args
-    events.ts      # JSON event parsing
-    sessions.ts    # leader session registry
-    profiles.ts    # named leader definitions
-    render.ts      # widgets/result rendering
-```
-
-For now, everything stays in `index.ts` to keep the first learning version easy to read.
+See the "What's not yet implemented" section in [architecture.md](architecture.md) for planned features.
