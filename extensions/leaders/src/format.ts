@@ -116,7 +116,9 @@ export const formatLeaderResult = (result: LeaderSingleResult): string => {
   }
 
   // Final output
-  const output = result.finalOutput || "(no output)";
+  const output =
+    result.finalOutput ||
+    (result.stderr ? `(no output)\n\nStderr:\n${result.stderr}` : "(no output)");
   parts.push(`\n${output}`);
 
   return parts.join("\n");

@@ -2,7 +2,7 @@
 name: reviewer
 description: Code review — check correctness, tests, edge cases, simplicity
 tools: read, grep, find, ls, bash
-model: claude-sonnet-4-5
+model: openai-codex/gpt-5.5
 systemPromptMode: replace
 inheritProjectContext: false
 inheritSkills: false

@@ -1,7 +1,7 @@
 ---
 name: worker
 description: General-purpose implementation agent with full capabilities
-model: claude-sonnet-4-5
+model: openai-codex/gpt-5.5
 systemPromptMode: replace
 inheritProjectContext: false
 inheritSkills: false

@@ -2,7 +2,7 @@
 name: scout
 description: Fast codebase recon — locate code, trace dependencies, return compressed context
 tools: read, grep, find, ls, bash
-model: claude-haiku-4-5
+model: opencode-go/deepseek-v4-flash
 systemPromptMode: replace
 inheritProjectContext: false
 inheritSkills: false

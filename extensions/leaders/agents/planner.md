@@ -2,7 +2,7 @@
 name: planner
 description: Create concrete implementation plans from context — read only, no edits
 tools: read, grep, find, ls
-model: claude-sonnet-4-5
+model: openai-codex/gpt-5.5
 systemPromptMode: replace
 inheritProjectContext: false
 inheritSkills: false
