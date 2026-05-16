@@ -6,6 +6,7 @@ import {
   createEditToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
+  keyHint,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -27,6 +28,21 @@ function errorMessage<T>(result: AgentToolResult<T>): string | undefined {
 
 function lineCount(text: string): number {
   return text.length === 0 ? 0 : text.split("\n").length;
+}
+
+function isSkillPath(filePath: string): boolean {
+  const normalized = filePath.replaceAll("\\", "/");
+  return (
+    /(?:^|\/)SKILL\.md$/i.test(normalized) && /(?:^|\/)(?:\.pi|\.agents|skills)\//.test(normalized)
+  );
+}
+
+function skillNameFromPath(filePath: string): string {
+  const normalized = filePath.replaceAll("\\", "/");
+  const parts = normalized.split("/").filter(Boolean);
+  const idx = parts.findIndex((p) => p.toLowerCase() === "skills");
+  if (idx >= 0 && parts[idx + 1]) return parts[idx + 1];
+  return path.basename(path.dirname(normalized));
 }
 
 // ── Path shortening ─────────────────────────────────────────────────────────
@@ -101,10 +117,21 @@ export function registerTools(pi: ExtensionAPI, state: DiffViewerState): void {
               `:${args.offset ?? 1}${args.limit ? `-${(args.offset ?? 1) + args.limit - 1}` : ""}`,
             )
           : "";
-      const formatted = formatPath(args.path || "...", context.cwd, theme);
+      const targetPath = args.path || "...";
+      const formatted = formatPath(targetPath, context.cwd, theme);
+
+      if (isSkillPath(targetPath)) {
+        const skill = skillNameFromPath(targetPath);
+        return new Text(
+          `${theme.fg("accent", "✦ ")}${theme.fg("toolTitle", "Loading skill: ")}${theme.bold(theme.fg("accent", skill))}${range}`,
+          0,
+          0,
+        );
+      }
+
       return new Text(`${theme.fg("muted", "read ")}${formatted}${range}`, 0, 0);
     },
-    renderResult(result, options, theme) {
+    renderResult(result, options, theme, context) {
       if (options.isPartial) return new Text(theme.fg("warning", "Reading..."), 0, 0);
       const error = errorMessage(result);
       if (error) return new Text(theme.fg("error", error), 0, 0);
@@ -114,6 +141,23 @@ export function registerTools(pi: ExtensionAPI, state: DiffViewerState): void {
       if (first?.type !== "text") return new Text(theme.fg("success", "Read"), 0, 0);
 
       const count = lineCount(first.text);
+      const targetPath = (context.args as { path?: string } | undefined)?.path ?? "";
+
+      if (isSkillPath(targetPath)) {
+        const skill = skillNameFromPath(targetPath);
+        let text =
+          `${theme.fg("accent", "✦ ")}${theme.fg("success", "Skill: ")}${theme.bold(theme.fg("accent", skill))}` +
+          theme.fg("success", ` loaded (${count} line${count === 1 ? "" : "s"})`);
+        if (!options.expanded) {
+          text += ` ${theme.fg("dim", `[${keyHint("app.tools.expand", "expand")}]`)}`;
+        }
+        if (options.expanded) {
+          const formatted = formatPath(targetPath, context.cwd, theme);
+          text += `\n${theme.fg("dim", String(formatted))}\n${theme.fg("toolOutput", first.text)}`;
+        }
+        return new Text(text, 0, 0);
+      }
+
       let text = theme.fg("success", `${count} line${count === 1 ? "" : "s"} read`);
       if (options.expanded) text += `\n${theme.fg("toolOutput", first.text)}`;
       return new Text(text, 0, 0);
