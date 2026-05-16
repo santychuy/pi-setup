@@ -10,9 +10,9 @@ const COLUMN_GAP_WIDTH = 3;
 
 const START_COMMANDS = [
   "/model pick model",
-  "/theme change theme",
-  "/reload refresh",
-  "/help more commands",
+  "/settings theme & config",
+  "/tree jump to point",
+  "/reload refresh session",
 ] as const;
 
 type HeaderInfo = {

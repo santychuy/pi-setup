@@ -1,6 +1,6 @@
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { keyHint, type Theme } from "@earendil-works/pi-coding-agent";
 import { loadHighlightedDiff } from "./pierre-highlight.js";
 import { buildDiffRows, summarizeMetadata } from "./pierre.js";
 import { getPierrePalette, type PierreTerminalPalette } from "./pierre-theme.js";
@@ -74,7 +74,7 @@ export class PierreDiffBlock implements Component {
       renderFullWidthLine(
         [
           {
-            text: `... ${lines.length - visible} more lines`,
+            text: `... ${lines.length - visible} more lines, ${keyHint("app.tools.expand", "to expand")}`,
             fg: this.palette.metadataFg,
             bg: this.palette.metadataBg,
           },

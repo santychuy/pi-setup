@@ -1,4 +1,7 @@
-import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import type { AgentToolResult, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import {
   createEditToolDefinition,
   createReadToolDefinition,
@@ -26,10 +29,51 @@ function lineCount(text: string): number {
   return text.length === 0 ? 0 : text.split("\n").length;
 }
 
-function compactPath(path: string, maxLength = 80): string {
-  if (path.length <= maxLength) return path;
-  return `…${path.slice(-(maxLength - 1))}`;
-}
+// ── Path shortening ─────────────────────────────────────────────────────────
+//
+// 1. Inside project  → bare relative path:  extensions/leaders/package.json
+// 2. Inside home      → tilde substitution:  ~/.pi/config.json
+// 3. Long outside     → middle truncation:    /Library/…/macOS.sdk/stdio.h
+// 4. Short outside   → keep absolute:         /etc/hosts
+
+const shortenPath = (filePath: string, cwd: string): string => {
+  if (!filePath || filePath === "...") return filePath;
+
+  const rel = path.relative(cwd, filePath);
+  if (!rel.startsWith("..") && rel !== "") return rel;
+
+  const home = os.homedir();
+  if (filePath.startsWith(home + path.sep) || filePath === home) {
+    return "~" + filePath.slice(home.length);
+  }
+
+  if (filePath.length > 60) {
+    const parts = filePath.split(path.sep);
+    const filename = parts[parts.length - 1];
+    const parent = parts[parts.length - 2];
+    return path.sep + parts[1] + path.sep + "…" + path.sep + parent + path.sep + filename;
+  }
+
+  return filePath;
+};
+
+const formatPath = (filePath: string, cwd: string, theme: Theme): string => {
+  const shortened = shortenPath(filePath, cwd);
+  const lastSlash = shortened.lastIndexOf("/");
+
+  if (lastSlash === -1) {
+    return theme.fg("accent", shortened);
+  }
+
+  const dir = shortened.slice(0, lastSlash + 1);
+  const file = shortened.slice(lastSlash + 1);
+
+  if (shortened.startsWith("~/")) {
+    return theme.fg("dim", "~/") + theme.fg("muted", dir.slice(2)) + theme.fg("accent", file);
+  }
+
+  return theme.fg("muted", dir) + theme.fg("accent", file);
+};
 
 export function registerTools(pi: ExtensionAPI, state: DiffViewerState): void {
   const cwd = process.cwd();
@@ -49,19 +93,16 @@ export function registerTools(pi: ExtensionAPI, state: DiffViewerState): void {
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       return originalRead.execute(toolCallId, params, signal, onUpdate, ctx);
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       const range =
         args.offset || args.limit
           ? theme.fg(
-              "dim",
+              "warning",
               `:${args.offset ?? 1}${args.limit ? `-${(args.offset ?? 1) + args.limit - 1}` : ""}`,
             )
           : "";
-      return new Text(
-        `${theme.fg("toolTitle", theme.bold("read "))}${theme.fg("accent", compactPath(args.path))}${range}`,
-        0,
-        0,
-      );
+      const formatted = formatPath(args.path || "...", context.cwd, theme);
+      return new Text(`${theme.fg("muted", "read ")}${formatted}${range}`, 0, 0);
     },
     renderResult(result, options, theme) {
       if (options.isPartial) return new Text(theme.fg("warning", "Reading..."), 0, 0);
@@ -107,9 +148,9 @@ export function registerTools(pi: ExtensionAPI, state: DiffViewerState): void {
         return result;
       }
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       return new Text(
-        `${theme.fg("toolTitle", theme.bold("edit "))}${theme.fg("accent", compactPath(args.path))}`,
+        `${theme.fg("muted", "edit ")}${formatPath(args.path, context.cwd, theme)}`,
         0,
         0,
       );
@@ -160,10 +201,10 @@ export function registerTools(pi: ExtensionAPI, state: DiffViewerState): void {
         return result;
       }
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       const count = lineCount(args.content);
       return new Text(
-        `${theme.fg("toolTitle", theme.bold("write "))}${theme.fg("accent", compactPath(args.path))}${theme.fg("dim", ` (${count} line${count === 1 ? "" : "s"})`)}`,
+        `${theme.fg("muted", "write ")}${formatPath(args.path, context.cwd, theme)}${theme.fg("dim", ` (${count} line${count === 1 ? "" : "s"})`)}`,
         0,
         0,
       );

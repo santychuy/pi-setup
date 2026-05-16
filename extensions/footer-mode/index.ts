@@ -1,6 +1,8 @@
 import type { Component, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { spinners } from "unicode-animations";
+import { complete } from "@earendil-works/pi-ai";
+import type { Model, Api } from "@earendil-works/pi-ai";
 import {
   CustomEditor,
   type ExtensionAPI,
@@ -231,6 +233,33 @@ function formatModelInfo(
   };
 }
 
+const TITLE_GENERATION_PROMPT =
+  "Generate a very short title (max 6 words, no quotes, no punctuation) for a coding session that starts with this message. Reply with ONLY the title:";
+
+const MAX_TITLE_LENGTH = 50;
+
+/** Extract the first user message text from the session branch. */
+function getFirstUserMessage(
+  entries: Iterable<{ type: string; message?: { role?: string; content?: unknown } }>,
+): string | undefined {
+  for (const entry of entries) {
+    if (entry.type !== "message" || entry.message?.role !== "user") continue;
+    const content = entry.message.content;
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (
+        block &&
+        typeof block === "object" &&
+        block.type === "text" &&
+        typeof block.text === "string"
+      )
+        return block.text;
+    }
+  }
+  return undefined;
+}
+
 export default function (pi: ExtensionAPI): void {
   let mode: FooterMode = "zen";
   let activeTui: TUI | undefined;
@@ -241,6 +270,8 @@ export default function (pi: ExtensionAPI): void {
   let turnDurationTimer: ReturnType<typeof setInterval> | undefined;
   let lastTurnDuration: number | undefined;
   let lastTurnTokensPerSecond: number | undefined;
+  let sessionTitle: string | undefined;
+  let titleGenerationStarted = false;
 
   const rememberMode = () => {
     pi.appendEntry(STATE_TYPE, { mode });
@@ -354,10 +385,11 @@ export default function (pi: ExtensionAPI): void {
     ctx.ui.setWorkingVisible(mode === "dev");
 
     ctx.ui.setWidget("footer-mode-context-bar", undefined);
+    ctx.ui.setWidget("footer-mode-dev-info", undefined);
+    ctx.ui.setWidget("footer-mode-model-info", undefined);
+    ctx.ui.setWidget("footer-mode-session-title", undefined);
 
     if (mode === "zen") {
-      ctx.ui.setWidget("footer-mode-dev-info", undefined);
-      ctx.ui.setWidget("footer-mode-model-info", undefined);
       ctx.ui.setFooter(() => new EmptyFooter());
     } else {
       void refreshGitInfo(ctx);
@@ -435,6 +467,21 @@ export default function (pi: ExtensionAPI): void {
       ctx.ui.setFooter(() => new EmptyFooter());
     }
 
+    // Show session title above the editor in both modes
+    if (sessionTitle) {
+      ctx.ui.setWidget("footer-mode-session-title", (tui, theme) => {
+        activeTui = tui;
+        return {
+          invalidate() {},
+          render(width: number): string[] {
+            const title = theme.fg("muted", sessionTitle!);
+            const padding = Math.max(0, width - visibleWidth(title));
+            return [" ".repeat(padding) + title];
+          },
+        };
+      });
+    }
+
     requestRender();
     if (notify) ctx.ui.notify(`Footer mode: ${mode}`, "info");
   };
@@ -462,9 +509,12 @@ export default function (pi: ExtensionAPI): void {
     clearTurnDurationTimer();
     ctx.ui.setWorkingMessage();
     ctx.ui.setWorkingIndicator();
+    ctx.ui.setWidget("footer-mode-session-title", undefined);
     turnStartedAt = undefined;
     lastTurnDuration = undefined;
     lastTurnTokensPerSecond = undefined;
+    sessionTitle = undefined;
+    titleGenerationStarted = false;
     activeTui = undefined;
     currentCtx = undefined;
     currentModel = undefined;
@@ -475,7 +525,62 @@ export default function (pi: ExtensionAPI): void {
     startTurnDuration(ctx);
   });
 
-  pi.on("agent_start", requestRender);
+  pi.on("agent_start", async (_event, ctx) => {
+    requestRender();
+
+    if (titleGenerationStarted || pi.getSessionName()) return;
+
+    const userMessage = getFirstUserMessage(ctx.sessionManager.getBranch());
+    if (!userMessage?.trim()) return;
+
+    // Skip slash commands
+    if (userMessage.trim().startsWith("/")) return;
+
+    titleGenerationStarted = true;
+    const model = currentModel as Model<Api> | undefined;
+    if (!model) return;
+
+    try {
+      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+      if (!auth?.ok || !auth.apiKey) return;
+
+      const response = await complete(
+        model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: `${TITLE_GENERATION_PROMPT}\n\n${userMessage.slice(0, 500)}`,
+                },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        { apiKey: auth.apiKey, headers: auth.headers },
+      );
+
+      const title = response.content
+        .filter((c): c is { type: "text"; text: string } => c.type === "text")
+        .map((c) => c.text)
+        .join("")
+        .trim()
+        .replace(/^["']+|["']+$/g, "")
+        .replace(/[.!?;:]+$/, "")
+        .slice(0, MAX_TITLE_LENGTH);
+
+      if (title) {
+        sessionTitle = title;
+        pi.setSessionName(title);
+        requestRender();
+      }
+    } catch {
+      // Silently fail — the session simply won't get a title
+    }
+  });
   pi.on("message_update", requestRender);
   pi.on("message_end", requestRender);
   pi.on("agent_end", (event, ctx) => {
