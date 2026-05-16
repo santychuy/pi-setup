@@ -1,0 +1,36 @@
+{
+  "name": "pi-git-diff-viewer",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Private Pi extension for Pierre-style inline diffs and Zed git diff viewing.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@pierre/diffs": "1.1.22",
+    "@pierre/theme": "0.0.29",
+    "typebox": "1.0.55"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "tsdown": {
+    "entry": [
+      "index.ts"
+    ]
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
