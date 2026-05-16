@@ -1,6 +1,7 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   createEditToolDefinition,
+  createReadToolDefinition,
   createWriteToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -21,10 +22,62 @@ function errorMessage<T>(result: AgentToolResult<T>): string | undefined {
     : undefined;
 }
 
+function lineCount(text: string): number {
+  return text.length === 0 ? 0 : text.split("\n").length;
+}
+
+function compactPath(path: string, maxLength = 80): string {
+  if (path.length <= maxLength) return path;
+  return `…${path.slice(-(maxLength - 1))}`;
+}
+
 export function registerTools(pi: ExtensionAPI, state: DiffViewerState): void {
   const cwd = process.cwd();
+  const originalRead = createReadToolDefinition(cwd);
   const originalEdit = createEditToolDefinition(cwd);
   const originalWrite = createWriteToolDefinition(cwd);
+
+  pi.registerTool({
+    name: "read",
+    label: originalRead.label,
+    description: originalRead.description,
+    parameters: originalRead.parameters,
+    promptSnippet: originalRead.promptSnippet,
+    promptGuidelines: originalRead.promptGuidelines,
+    prepareArguments: originalRead.prepareArguments,
+    renderShell: "self",
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      return originalRead.execute(toolCallId, params, signal, onUpdate, ctx);
+    },
+    renderCall(args, theme) {
+      const range =
+        args.offset || args.limit
+          ? theme.fg(
+              "dim",
+              `:${args.offset ?? 1}${args.limit ? `-${(args.offset ?? 1) + args.limit - 1}` : ""}`,
+            )
+          : "";
+      return new Text(
+        `${theme.fg("toolTitle", theme.bold("read "))}${theme.fg("accent", compactPath(args.path))}${range}`,
+        0,
+        0,
+      );
+    },
+    renderResult(result, options, theme) {
+      if (options.isPartial) return new Text(theme.fg("warning", "Reading..."), 0, 0);
+      const error = errorMessage(result);
+      if (error) return new Text(theme.fg("error", error), 0, 0);
+
+      const first = result.content[0];
+      if (first?.type === "image") return new Text(theme.fg("success", "Image loaded"), 0, 0);
+      if (first?.type !== "text") return new Text(theme.fg("success", "Read"), 0, 0);
+
+      const count = lineCount(first.text);
+      let text = theme.fg("success", `${count} line${count === 1 ? "" : "s"} read`);
+      if (options.expanded) text += `\n${theme.fg("toolOutput", first.text)}`;
+      return new Text(text, 0, 0);
+    },
+  });
 
   pi.registerTool({
     name: "edit",
@@ -54,7 +107,13 @@ export function registerTools(pi: ExtensionAPI, state: DiffViewerState): void {
         return result;
       }
     },
-    renderCall: originalEdit.renderCall,
+    renderCall(args, theme) {
+      return new Text(
+        `${theme.fg("toolTitle", theme.bold("edit "))}${theme.fg("accent", compactPath(args.path))}`,
+        0,
+        0,
+      );
+    },
     renderResult(result, options, theme, context) {
       if (options.isPartial) return new Text(theme.fg("warning", "Editing..."), 0, 0);
       const error = errorMessage(result);
@@ -101,7 +160,14 @@ export function registerTools(pi: ExtensionAPI, state: DiffViewerState): void {
         return result;
       }
     },
-    renderCall: originalWrite.renderCall,
+    renderCall(args, theme) {
+      const count = lineCount(args.content);
+      return new Text(
+        `${theme.fg("toolTitle", theme.bold("write "))}${theme.fg("accent", compactPath(args.path))}${theme.fg("dim", ` (${count} line${count === 1 ? "" : "s"})`)}`,
+        0,
+        0,
+      );
+    },
     renderResult(result, options, theme, context) {
       if (options.isPartial) return new Text(theme.fg("warning", "Writing..."), 0, 0);
       const error = errorMessage(result);
