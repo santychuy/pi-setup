@@ -91,9 +91,41 @@ export interface LeaderRunOptions {
   task: string;
 }
 
+// ── Delegation Contract & Budget Policy ────────────────────────────────────
+
+export interface LeaderDelegationContract {
+  version: "1.0";
+  taskId: string;
+  goal: string;
+}
+
+export interface LeaderBudgetPolicy {
+  version: "1.0";
+  limits: {
+    maxAgentsPerRun: number;
+    maxParallel: number;
+    maxDelegationDepth: number;
+    maxDurationMs: number;
+    maxTokensTotal?: number;
+    maxCostUsdTotal?: number;
+  };
+}
+
+export const DEFAULT_BUDGET_POLICY: LeaderBudgetPolicy = {
+  version: "1.0",
+  limits: {
+    maxAgentsPerRun: 3,
+    maxParallel: 2,
+    maxDelegationDepth: 1,
+    maxDurationMs: 300_000,
+    maxTokensTotal: 140_000,
+    maxCostUsdTotal: 0.35,
+  },
+};
+
 // ── Tool Parameter Types ────────────────────────────────────────────────────
 
-export type LeaderAction = "run" | "list";
+export type LeaderAction = "run" | "list" | "status";
 
 // ── Default Agent ──────────────────────────────────────────────────────────
 

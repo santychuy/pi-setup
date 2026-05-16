@@ -18,8 +18,14 @@ import { Text } from "@earendil-works/pi-tui";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { DEFAULT_AGENT } from "./src/types.js";
-import type { LeaderAgentConfig, LeaderSingleResult, LeaderSessionMode } from "./src/types.js";
+import { DEFAULT_AGENT, DEFAULT_BUDGET_POLICY } from "./src/types.js";
+import type {
+  LeaderAgentConfig,
+  LeaderBudgetPolicy,
+  LeaderDelegationContract,
+  LeaderSingleResult,
+  LeaderSessionMode,
+} from "./src/types.js";
 import { LeaderTracker } from "./src/tracker.js";
 import { renderLeadersWidget } from "./src/widget.js";
 
@@ -173,9 +179,10 @@ const runLeader = async (
   tracker.markRunning(entryId);
 
   return await new Promise<LeaderSingleResult>((resolve, reject) => {
+    const nextDepth = String(getCurrentDepth() + 1);
     const proc = spawn("pi", args, {
       cwd: ctx.cwd,
-      env: { ...process.env, [CHILD_ENV]: "1" },
+      env: { ...process.env, [CHILD_ENV]: "1", [LEADERS_DEPTH_ENV]: nextDepth },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -411,6 +418,62 @@ const updateWidget = (ctx: ExtensionContext): void => {
   ctx.ui.setWidget(WIDGET_KEY, lines, { placement: "aboveEditor" });
 };
 
+const LEADERS_DEPTH_ENV = "PI_LEADERS_DEPTH";
+
+interface ContractValidationResult {
+  ok: boolean;
+  parsed?: Record<string, unknown>;
+  error?: string;
+}
+
+const parseJsonObjectFromText = (text: string): Record<string, unknown> | undefined => {
+  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
+  const candidate = fenced?.[1] ?? text;
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start < 0 || end <= start) return undefined;
+
+  try {
+    const parsed = JSON.parse(candidate.slice(start, end + 1)) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const validateContractResult = (
+  contract: LeaderDelegationContract,
+  output: string,
+): ContractValidationResult => {
+  const parsed = parseJsonObjectFromText(output);
+  if (!parsed) {
+    return { ok: false, error: "Missing JSON object result" };
+  }
+
+  const hasTaskId = parsed.taskId === contract.taskId;
+  const hasStatus = typeof parsed.status === "string";
+  const hasSummary = typeof parsed.summary === "string";
+
+  if (!hasTaskId || !hasStatus || !hasSummary) {
+    return {
+      ok: false,
+      error: "Invalid contract result schema: required { taskId, status, summary }",
+    };
+  }
+
+  return { ok: true, parsed };
+};
+
+const getCurrentDepth = (): number => {
+  const parsed = Number.parseInt(process.env[LEADERS_DEPTH_ENV] ?? "0", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+};
+
+const isDepthAllowed = (policy: LeaderBudgetPolicy): boolean =>
+  getCurrentDepth() < policy.limits.maxDelegationDepth;
+
 const leadersExtension = (pi: ExtensionAPI): void => {
   // ── Widget: re-render on tracker state changes ───────────────────────────
   // We store the latest ExtensionContext so the tracker callback can update
@@ -449,6 +512,26 @@ const leadersExtension = (pi: ExtensionAPI): void => {
     parameters: Type.Object({
       task: Type.Optional(
         Type.String({ description: "The complete task for the leader to perform." }),
+      ),
+      contract: Type.Optional(
+        Type.Object({
+          version: Type.Literal("1.0"),
+          taskId: Type.String(),
+          goal: Type.String(),
+        }),
+      ),
+      budget: Type.Optional(
+        Type.Object({
+          version: Type.Literal("1.0"),
+          limits: Type.Object({
+            maxAgentsPerRun: Type.Number(),
+            maxParallel: Type.Number(),
+            maxDelegationDepth: Type.Number(),
+            maxDurationMs: Type.Number(),
+            maxTokensTotal: Type.Optional(Type.Number()),
+            maxCostUsdTotal: Type.Optional(Type.Number()),
+          }),
+        }),
       ),
       mode: Type.Optional(
         Type.Union([
@@ -543,6 +626,20 @@ const leadersExtension = (pi: ExtensionAPI): void => {
 
       // ── Run action ────────────────────────────────────────
       const task = params.task;
+      const budget: LeaderBudgetPolicy = params.budget ?? DEFAULT_BUDGET_POLICY;
+      const contract: LeaderDelegationContract | undefined = params.contract;
+
+      if (!isDepthAllowed(budget)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Delegation blocked by budget policy: maxDelegationDepth=${budget.limits.maxDelegationDepth}.`,
+            },
+          ],
+          details: { budget, blocked: "maxDelegationDepth" },
+        };
+      }
       if (!task) {
         return {
           content: [
@@ -564,8 +661,12 @@ const leadersExtension = (pi: ExtensionAPI): void => {
       const mode: LeaderSessionMode = params.mode ?? agent.sessionMode ?? "ephemeral";
 
       // ── Async or foreground execution ──────────────────────────────
+      const delegatedTask = contract
+        ? `${task}\n\nReturn your final answer as a single JSON object matching this minimum schema:\n{\n  "taskId": "${contract.taskId}",\n  "status": "success|partial|failed|blocked",\n  "summary": "string"\n}`
+        : task;
+
       if (params.async) {
-        const asyncRun = await spawnAsyncLeader(task, ctx, agent, mode);
+        const asyncRun = await spawnAsyncLeader(delegatedTask, ctx, agent, mode, budget);
         return {
           content: [
             {
@@ -573,15 +674,43 @@ const leadersExtension = (pi: ExtensionAPI): void => {
               text: `Leader started in background.\nID: ${asyncRun.id}\nAgent: ${asyncRun.agent}\nMode: ${asyncRun.mode}\nStatus: ${asyncRun.status}\n\nCheck status with: leader({ action: "status", id: "${asyncRun.id}" })`,
             },
           ],
-          details: { run: asyncRun },
+          details: { run: asyncRun, budget, contract },
         };
       }
 
-      const result = await runLeader(task, ctx, agent, mode, signal, onUpdate);
+      const result = await runLeader(delegatedTask, ctx, agent, mode, signal, onUpdate);
+
+      const validation = contract
+        ? validateContractResult(contract, result.finalOutput)
+        : ({ ok: true } as ContractValidationResult);
+
+      if (!validation.ok) {
+        const schemaErrorResult: LeaderSingleResult = {
+          ...result,
+          exitCode: result.exitCode === 0 ? 1 : result.exitCode,
+          errorMessage: `schema_error: ${validation.error}`,
+          stopReason: "error",
+        };
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${formatLeaderResult(schemaErrorResult)}\n\nContract validation failed: ${validation.error}`,
+            },
+          ],
+          details: {
+            ...schemaErrorResult,
+            budget,
+            contract,
+            contractValidation: validation,
+          },
+        };
+      }
 
       return {
         content: [{ type: "text", text: formatLeaderResult(result) }],
-        details: result,
+        details: { ...result, budget, contract, contractValidation: validation },
       };
     },
 

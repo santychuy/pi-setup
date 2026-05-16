@@ -11,7 +11,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import type { LeaderAgentConfig, LeaderSessionMode, LeaderSingleResult } from "./types.js";
+import type {
+  LeaderAgentConfig,
+  LeaderBudgetPolicy,
+  LeaderSessionMode,
+  LeaderSingleResult,
+} from "./types.js";
 import { createStreamParseState, getFinalOutput, processStreamChunk } from "./stream-parser.js";
 import {
   CHILD_ENV,
@@ -105,6 +110,7 @@ export const spawnAsyncLeader = async (
   ctx: ExtensionContext,
   agent: LeaderAgentConfig,
   mode: LeaderSessionMode,
+  _budget?: LeaderBudgetPolicy,
 ): Promise<LeaderAsyncRun> => {
   const runId = randomUUID();
   const runDir = path.join(ASYNC_DIR, runId);
@@ -139,7 +145,14 @@ export const spawnAsyncLeader = async (
 
   const logStream = fs.createWriteStream(logPath(runId), { flags: "a" });
 
-  const childEnv = { ...process.env, [CHILD_ENV]: "1" };
+  const currentDepth = Number.parseInt(process.env.PI_LEADERS_DEPTH ?? "0", 10) || 0;
+  const nextDepth = String(currentDepth + 1);
+
+  const childEnv = {
+    ...process.env,
+    [CHILD_ENV]: "1",
+    PI_LEADERS_DEPTH: nextDepth,
+  };
 
   const proc = spawn("pi", args, {
     cwd: ctx.cwd,
