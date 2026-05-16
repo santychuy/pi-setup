@@ -5,6 +5,8 @@ This is a personal Pi coding agent setup repository. It is structured as an inst
 Use bun as package manager, instead of npm.
 Every new package to install should be using the `-E` flag for installing the exact version, without declaring the fixed version.
 
+When implementing or modifying JavaScript or TypeScript files, always load the `modern-javascript-patterns` and `typescript-advanced-types` skills before making code changes.
+
 ## How Pi Discovers This Repo
 
 Two paths:
