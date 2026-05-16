@@ -149,7 +149,7 @@ export function registerTools(pi: ExtensionAPI, state: DiffViewerState): void {
           `${theme.fg("accent", "✦ ")}${theme.fg("success", "Skill: ")}${theme.bold(theme.fg("accent", skill))}` +
           theme.fg("success", ` loaded (${count} line${count === 1 ? "" : "s"})`);
         if (!options.expanded) {
-          text += ` ${theme.fg("dim", `[${keyHint("app.tools.expand", "expand")}]`)}`;
+          text += ` ${theme.fg("dim", keyHint("app.tools.expand", "expand"))}`;
         }
         if (options.expanded) {
           const formatted = formatPath(targetPath, context.cwd, theme);
