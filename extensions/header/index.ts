@@ -19,6 +19,7 @@ type HeaderInfo = {
   readonly tools: string;
   readonly extensions: string;
   readonly prompts: string;
+  readonly mcps: string;
   readonly context: string;
 };
 
@@ -63,10 +64,17 @@ const getHeaderInfo = (pi: ExtensionAPI, ctx: ExtensionContext): HeaderInfo => {
   const commands = pi.getCommands();
   const prompts = commands.filter((command) => command.source === "prompt");
   const extensionSources = new Set<string>();
+  const mcpExtensionSources = new Set<string>();
 
   for (const tool of allTools) {
     const sourcePath = sourcePathFrom(tool);
-    if (sourcePath) extensionSources.add(sourcePath);
+    if (!sourcePath) continue;
+
+    extensionSources.add(sourcePath);
+
+    if (sourcePath.includes("pi-mcp-adapter")) {
+      mcpExtensionSources.add(sourcePath);
+    }
   }
 
   for (const command of commands) {
@@ -82,6 +90,7 @@ const getHeaderInfo = (pi: ExtensionAPI, ctx: ExtensionContext): HeaderInfo => {
     tools: `tools ${activeTools.length}/${allTools.length}`,
     extensions: `extensions ${extensionSources.size}`,
     prompts: `prompts ${prompts.length}`,
+    mcps: `mcp ${mcpExtensionSources.size}`,
     context: `context ${compactList(contextFiles, "none")}`,
   };
 };
@@ -107,7 +116,7 @@ const createHeaderComponent = (theme: Theme, info: HeaderInfo): Component => ({
     if (boxWidth >= MIN_SPLIT_WIDTH) {
       const leftWidth = Math.floor((contentWidth - COLUMN_GAP_WIDTH) * 0.36);
       const rightWidth = contentWidth - leftWidth - COLUMN_GAP_WIDTH;
-      const infoRows = [info.tools, info.extensions, info.prompts, info.context];
+      const infoRows = [info.tools, info.extensions, info.prompts, info.mcps, info.context];
       const rowCount = Math.max(infoRows.length, START_COMMANDS.length);
 
       pushBoxLine(
@@ -122,7 +131,7 @@ const createHeaderComponent = (theme: Theme, info: HeaderInfo): Component => ({
       }
     } else {
       pushBoxLine(accent("Info"));
-      for (const row of [info.tools, info.extensions, info.prompts, info.context]) {
+      for (const row of [info.tools, info.extensions, info.prompts, info.mcps, info.context]) {
         pushBoxLine(muted(row));
       }
 
