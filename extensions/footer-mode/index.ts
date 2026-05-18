@@ -45,78 +45,87 @@ const TURN_DURATION_UPDATE_INTERVAL_MS = 250;
 const WORKING_SPINNER = spinners.columns;
 
 /** Hides Pi's default footer while keeping the custom below-editor widgets active. */
-class EmptyFooter implements Component {
-  render(): string[] {
-    return [];
-  }
-
-  invalidate(): void {}
-}
+const createEmptyFooter = (): Component => ({
+  render: () => [],
+  invalidate: () => {},
+});
 
 /**
  * Keeps the editor border color stable across renders while highlighting bash mode.
  *
  * When the prompt starts with `!`, Pi will run it as a bash command. This wrapper
- * uses the warning/yellow border in that state and falls back to the muted base border otherwise.
+ * uses the warning/yellow border and input text in that state, and falls back to
+ * the muted base border with normal input rendering otherwise.
  */
-class BashAwareBorderEditor extends CustomEditor {
-  constructor(
-    tui: TUI,
-    theme: EditorTheme,
-    keybindings: KeybindingsManager,
-    private readonly baseBorder: (text: string) => string,
-    private readonly bashBorder: (text: string) => string,
-  ) {
-    super(tui, { ...theme, borderColor: baseBorder }, keybindings);
-  }
+const createBashAwareBorderEditor = (
+  tui: TUI,
+  theme: EditorTheme,
+  keybindings: KeybindingsManager,
+  baseBorder: (text: string) => string,
+  bashBorder: (text: string) => string,
+  bashInput: (text: string) => string,
+): CustomEditor => {
+  const editor = new CustomEditor(tui, { ...theme, borderColor: baseBorder }, keybindings);
+  const isBashMode = (): boolean => editor.getText().startsWith("!");
+  const getBorderColor = (): ((text: string) => string) => (isBashMode() ? bashBorder : baseBorder);
 
-  private getBorderColor(): (text: string) => string {
-    return this.getText().startsWith("!") ? this.bashBorder : this.baseBorder;
-  }
+  const originalHandleInput = editor.handleInput.bind(editor);
+  editor.handleInput = (data: string): void => {
+    originalHandleInput(data);
+    editor.borderColor = getBorderColor();
+  };
 
-  handleInput(data: string): void {
-    super.handleInput(data);
-    this.borderColor = this.getBorderColor();
-  }
+  const originalSetText = editor.setText.bind(editor);
+  editor.setText = (text: string): void => {
+    originalSetText(text);
+    editor.borderColor = getBorderColor();
+  };
 
-  setText(text: string): void {
-    super.setText(text);
-    this.borderColor = this.getBorderColor();
-  }
+  const originalInsertTextAtCursor = editor.insertTextAtCursor.bind(editor);
+  editor.insertTextAtCursor = (text: string): void => {
+    originalInsertTextAtCursor(text);
+    editor.borderColor = getBorderColor();
+  };
 
-  insertTextAtCursor(text: string): void {
-    super.insertTextAtCursor(text);
-    this.borderColor = this.getBorderColor();
-  }
+  const originalRender = editor.render.bind(editor);
+  editor.render = (width: number): string[] => {
+    editor.borderColor = getBorderColor();
+    const lines = originalRender(width);
 
-  render(width: number): string[] {
-    this.borderColor = this.getBorderColor();
-    return super.render(width);
-  }
-}
+    if (!isBashMode() || lines.length <= 2) return lines;
 
-function isFooterMode(value: unknown): value is FooterMode {
+    const lastEditorLineIndex = lines.length - 1;
+    return lines.map((line, index) => {
+      const isEditorBorder = index === 0 || index === lastEditorLineIndex;
+      return isEditorBorder ? line : bashInput(line);
+    });
+  };
+
+  return editor;
+};
+
+const isFooterMode = (value: unknown): value is FooterMode => {
   return value === "zen" || value === "dev";
-}
+};
 
-function getStoredMode(data: unknown): FooterMode | undefined {
+const getStoredMode = (data: unknown): FooterMode | undefined => {
   if (!data || typeof data !== "object" || !("mode" in data)) return undefined;
   const value = (data as { mode?: unknown }).mode;
   return isFooterMode(value) ? value : undefined;
-}
+};
 
 /** Compact cwd for narrow footer space while preserving the useful tail path. */
-function formatCwd(cwd: string): string {
+const formatCwd = (cwd: string): string => {
   const home = process.env.HOME;
   const compact = home && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
   const parts = compact.split("/").filter(Boolean);
   if (compact.startsWith("~/") && parts.length > 2) return `~/${parts.slice(-2).join("/")}`;
   if (!compact.startsWith("~") && parts.length > 3) return `…/${parts.slice(-3).join("/")}`;
   return compact;
-}
+};
 
 /** Format Unix reset timestamps into short quota-reset labels. */
-function formatResetShort(resetAt: number | undefined): string {
+const formatResetShort = (resetAt: number | undefined): string => {
   if (!resetAt) return "unknown";
 
   const minutes = Math.max(0, Math.round((resetAt * 1000 - Date.now()) / 60000));
@@ -127,9 +136,9 @@ function formatResetShort(resetAt: number | undefined): string {
   if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return `${hours}h ${mins}m`;
   return `${mins}m`;
-}
+};
 
-function formatDuration(ms: number): string {
+const formatDuration = (ms: number): string => {
   const totalSeconds = Math.floor(ms / 1000);
   const seconds = totalSeconds % 60;
   const totalMinutes = Math.floor(totalSeconds / 60);
@@ -139,34 +148,34 @@ function formatDuration(ms: number): string {
   if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
   if (minutes > 0) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
-}
+};
 
-function formatTokensPerSecond(tokensPerSecond: number): string {
+const formatTokensPerSecond = (tokensPerSecond: number): string => {
   if (tokensPerSecond >= 100) return `${Math.round(tokensPerSecond)} tok/s`;
   return `${tokensPerSecond.toFixed(1)} tok/s`;
-}
+};
 
-function isOpenAICodexProvider(provider: string | undefined): boolean {
+const isOpenAICodexProvider = (provider: string | undefined): boolean => {
   return /^openai-codex(-\d+)?$/.test(provider ?? "");
-}
+};
 
-function formatCompactTokens(count: number): string {
+const formatCompactTokens = (count: number): string => {
   const abs = Math.abs(count);
   if (abs >= 1_000_000) return `${Number((count / 1_000_000).toFixed(1))}m`;
   if (abs >= 1_000) return `${Number((count / 1_000).toFixed(1))}k`;
   return `${Math.round(count)}`;
-}
+};
 
-function formatEstimatedCost(cost: number): string {
+const formatEstimatedCost = (cost: number): string => {
   if (cost >= 10) return `$${cost.toFixed(1)}`;
   if (cost >= 1) return `$${cost.toFixed(2)}`;
   return `$${cost.toFixed(2)}`;
-}
+};
 
-function formatSessionTokenTotals(
+const formatSessionTokenTotals = (
   ctx: ExtensionContext,
   colorToken: (text: string) => string,
-): string {
+): string => {
   let input = 0;
   let output = 0;
   let cost = 0;
@@ -181,15 +190,15 @@ function formatSessionTokenTotals(
   return colorToken(
     `↑${formatCompactTokens(input)} ↓${formatCompactTokens(output)}  ${formatEstimatedCost(cost)}`,
   );
-}
+};
 
 /** Compact braille-style bar showing the context window percentage already filled. */
-function formatContextBar(
+const formatContextBar = (
   ctx: ExtensionContext,
   modelConfig: ExtensionContext["model"],
   colorToken: (text: string) => string,
   colorBar: (percentUsed: number, text: string) => string,
-): string {
+): string => {
   const usage = ctx.getContextUsage();
   const contextWindow = usage?.contextWindow ?? modelConfig?.contextWindow ?? 0;
   const usedTokens = usage?.tokens ?? 0;
@@ -206,10 +215,10 @@ function formatContextBar(
   const filledCells = Math.round((percentUsed / 100) * totalCells);
   const bar = `${"⣿".repeat(filledCells)}${"⣀".repeat(totalCells - filledCells)}`;
   return prefix + colorBar(percentUsed, `[${bar}] ${Math.round(percentUsed)}%`);
-}
+};
 
 /** Build the right-side model/footer payload from Pi model state and optional Codex quota globals. */
-function formatModelInfo(
+const formatModelInfo = (
   pi: ExtensionAPI,
   modelConfig: ExtensionContext["model"],
 ): {
@@ -217,7 +226,7 @@ function formatModelInfo(
   model: string;
   thinking?: PiThinkingLevel;
   usage?: CodexLimitUsage["fiveHour"];
-} {
+} => {
   const provider = modelConfig?.provider ?? "no-provider";
   const model = modelConfig?.id ?? "no-model";
   const thinking = pi.getThinkingLevel() as PiThinkingLevel;
@@ -231,7 +240,7 @@ function formatModelInfo(
         ? codexLimit.fiveHour
         : undefined,
   };
-}
+};
 
 const TITLE_GENERATION_PROMPT =
   "Generate a very short title (max 6 words, no quotes, no punctuation) for a coding session that starts with this message. Reply with ONLY the title:";
@@ -239,9 +248,9 @@ const TITLE_GENERATION_PROMPT =
 const MAX_TITLE_LENGTH = 50;
 
 /** Extract the first user message text from the session branch. */
-function getFirstUserMessage(
+const getFirstUserMessage = (
   entries: Iterable<{ type: string; message?: { role?: string; content?: unknown } }>,
-): string | undefined {
+): string | undefined => {
   for (const entry of entries) {
     if (entry.type !== "message" || entry.message?.role !== "user") continue;
     const content = entry.message.content;
@@ -258,9 +267,9 @@ function getFirstUserMessage(
     }
   }
   return undefined;
-}
+};
 
-export default function (pi: ExtensionAPI): void {
+export default (pi: ExtensionAPI): void => {
   let mode: FooterMode = "zen";
   let activeTui: TUI | undefined;
   let currentCtx: ExtensionContext | undefined;
@@ -331,11 +340,12 @@ export default function (pi: ExtensionAPI): void {
 
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {
       activeTui = tui;
-      return new BashAwareBorderEditor(
+      return createBashAwareBorderEditor(
         tui,
         theme,
         keybindings,
         (text) => ctx.ui.theme.fg("borderMuted", text),
+        (text) => ctx.ui.theme.fg("warning", text),
         (text) => ctx.ui.theme.fg("warning", text),
       );
     });
@@ -390,7 +400,7 @@ export default function (pi: ExtensionAPI): void {
     ctx.ui.setWidget("footer-mode-session-title", undefined);
 
     if (mode === "zen") {
-      ctx.ui.setFooter(() => new EmptyFooter());
+      ctx.ui.setFooter(createEmptyFooter);
     } else {
       void refreshGitInfo(ctx);
       ctx.ui.setWidget("footer-mode-dev-info", (tui, theme) => {
@@ -464,7 +474,7 @@ export default function (pi: ExtensionAPI): void {
         { placement: "belowEditor" },
       );
 
-      ctx.ui.setFooter(() => new EmptyFooter());
+      ctx.ui.setFooter(createEmptyFooter);
     }
 
     // Show session title above the editor in both modes
@@ -629,4 +639,4 @@ export default function (pi: ExtensionAPI): void {
       ctx.ui.notify("Usage: /footer [zen|dev|toggle]", "warning");
     },
   });
-}
+};
