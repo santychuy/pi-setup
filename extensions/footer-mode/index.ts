@@ -422,7 +422,12 @@ export default (pi: ExtensionAPI): void => {
             const branch = theme.fg("accent", branchLabel);
             const separator = theme.fg("dim", " · ");
             const directory = theme.fg("dim", formatCwd(ctx.cwd));
-            return [truncateToWidth(changeCount + branch + separator + directory, width)];
+            const left = changeCount + branch + separator + directory;
+            const displayTitle = pi.getSessionName() ?? sessionTitle;
+            const right = displayTitle ? theme.fg("muted", displayTitle) : "";
+            if (!right) return [truncateToWidth(left, width)];
+            const gap = Math.max(1, width - visibleWidth(left) - visibleWidth(right));
+            return [truncateToWidth(left + " ".repeat(gap) + right, width)];
           },
         };
       });
@@ -483,21 +488,6 @@ export default (pi: ExtensionAPI): void => {
       ctx.ui.setFooter(createEmptyFooter);
     }
 
-    // Show session title above the editor in both modes
-    if (sessionTitle) {
-      ctx.ui.setWidget("footer-mode-session-title", (tui, theme) => {
-        activeTui = tui;
-        return {
-          invalidate() {},
-          render(width: number): string[] {
-            const title = theme.fg("muted", sessionTitle!);
-            const padding = Math.max(0, width - visibleWidth(title));
-            return [" ".repeat(padding) + title];
-          },
-        };
-      });
-    }
-
     requestRender();
     if (notify) ctx.ui.notify(`Footer mode: ${mode}`, "info");
   };
@@ -552,13 +542,14 @@ export default (pi: ExtensionAPI): void => {
     // Skip slash commands
     if (userMessage.trim().startsWith("/")) return;
 
-    titleGenerationStarted = true;
     const model = currentModel as Model<Api> | undefined;
     if (!model) return;
 
     try {
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
       if (!auth?.ok || !auth.apiKey) return;
+
+      titleGenerationStarted = true;
 
       const response = await complete(
         model,
@@ -591,10 +582,13 @@ export default (pi: ExtensionAPI): void => {
       if (title) {
         sessionTitle = title;
         pi.setSessionName(title);
+        if (currentCtx) applyMode(currentCtx);
         requestRender();
       }
     } catch {
       // Silently fail — the session simply won't get a title
+    } finally {
+      titleGenerationStarted = false;
     }
   });
   pi.on("message_update", requestRender);
