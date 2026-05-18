@@ -15,7 +15,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { DEFAULT_AGENT, DEFAULT_BUDGET_POLICY } from "./src/types.js";
@@ -31,41 +30,18 @@ import { renderLeadersWidget } from "./src/widget.js";
 
 import { createStreamParseState, getFinalOutput, processStreamChunk } from "./src/stream-parser.js";
 import { formatLeaderResult, formatUsageStats } from "./src/format.js";
-import { CHILD_ENV, makeSessionFile, writePromptToTempFile, cleanupTempFile } from "./src/utils.js";
+import { CHILD_ENV, writePromptToTempFile, cleanupTempFile } from "./src/utils.js";
 import { buildLeaderArgs } from "./src/spawn-builder.js";
+import { resolveLeaderSessionFile } from "./src/session.js";
 import {
   spawnAsyncLeader,
   readAsyncStatus,
   listAsyncRuns,
   cleanupOldAsyncRuns,
   formatAsyncStatus,
+  hasPendingSessionCleanup,
+  retryPendingAsyncSessionCleanups,
 } from "./src/async.js";
-
-// ── Forked Context ──────────────────────────────────────────────────────────
-
-/**
- * Create a branched session file from the parent's current context.
- * Returns the branched session file path on success, or an error string on failure.
- */
-const createForkedSessionFile = (ctx: ExtensionContext): string | undefined => {
-  const parentFile = ctx.sessionManager.getSessionFile();
-
-  if (!parentFile) {
-    return undefined;
-  }
-
-  const leafId = ctx.sessionManager.getLeafId();
-  if (!leafId) {
-    return undefined;
-  }
-
-  try {
-    const parentSession = SessionManager.open(parentFile);
-    return parentSession.createBranchedSession(leafId) ?? undefined;
-  } catch {
-    return undefined;
-  }
-};
 
 // ── Global Tracker Instance ─────────────────────────────────────────────────
 
@@ -88,23 +64,11 @@ const runLeader = async (
   const entryId = tracker.add(agent.name, task, mode);
 
   // ── Session setup ──────────────────────────────────────────────────────
-  let sessionFile: string | undefined;
-  let forkError: string | undefined;
+  const sessionResolution = resolveLeaderSessionFile(ctx, mode);
+  const { cleanupSessionFile, sessionFile } = sessionResolution;
 
-  if (mode === "fork") {
-    const forkedPath = createForkedSessionFile(ctx);
-    if (!forkedPath) {
-      forkError =
-        "Cannot fork: parent session has no persisted file or no entries. Use persistent or ephemeral mode instead.";
-    } else {
-      sessionFile = forkedPath;
-    }
-  } else if (mode === "persistent") {
-    sessionFile = makeSessionFile();
-  }
-
-  // ── Handle fork failure → fall back to ephemeral ───────────────────────
-  if (forkError && !sessionFile) {
+  // ── Handle fork failure ────────────────────────────────────────────────
+  if (sessionResolution.error) {
     // Fork failed; mark tracker entry as failed and return error result
     tracker.markFailed(entryId, 1);
     return {
@@ -125,7 +89,7 @@ const runLeader = async (
         turns: 0,
       },
       displayItems: [],
-      finalOutput: forkError,
+      finalOutput: sessionResolution.error,
       stderr: "",
     };
   }
@@ -193,13 +157,22 @@ const runLeader = async (
     const cleanup = (): void => {
       signal?.removeEventListener("abort", abort);
       cleanupTempFile(tmpPromptDir, tmpPromptPath);
+      if (cleanupSessionFile && sessionFile) {
+        try {
+          fs.rmSync(sessionFile, { force: true });
+        } catch {
+          // Temporary fork cleanup is best-effort and should not replace the
+          // leader result with a filesystem cleanup failure.
+        }
+      }
     };
 
     const settle = <T>(callback: () => T): T | undefined => {
-      cleanup();
       if (settled) return undefined;
       settled = true;
-      return callback();
+      const value = callback();
+      cleanup();
+      return value;
     };
 
     const abort = (): void => {
@@ -241,6 +214,9 @@ const runLeader = async (
         result.stopReason = streamState.stopReason;
         result.errorMessage = streamState.errorMessage;
         result.stderr = stderrBuffer.trim();
+        if (cleanupSessionFile) {
+          result.sessionFile = undefined;
+        }
 
         // ── Tracker: mark terminal state ────────────────────────────
         const exitCode = code ?? 0;
@@ -355,7 +331,7 @@ const discoverLeaderAgents = (_cwd: string): LeaderAgentDiscoveryResult => {
 
 // ── Slash Command Parser ────────────────────────────────────────────────────
 
-const SESSION_FLAGS = ["--ephemeral", "--persistent", "--fork"] as const;
+const SESSION_FLAGS = ["--ephemeral", "--persistent", "--fork", "--ephemeral-fork"] as const;
 
 interface LeaderCommandInput {
   task: string;
@@ -375,17 +351,20 @@ const parseLeaderCommand = (args: string | undefined): LeaderCommandInput | stri
 
   // Parse mode flags
   const modes = flags.filter((f) => SESSION_FLAGS.includes(f as (typeof SESSION_FLAGS)[number]));
-  if (modes.length > 1) return "Use only one mode flag: --ephemeral, --persistent, or --fork";
+  if (modes.length > 1)
+    return "Use only one mode flag: --ephemeral, --persistent, --fork, or --ephemeral-fork";
 
   let mode: LeaderSessionMode = "ephemeral";
   if (modes.length === 1) {
     if (modes[0] === "--persistent") mode = "persistent";
     else if (modes[0] === "--fork") mode = "fork";
+    else if (modes[0] === "--ephemeral-fork") mode = "ephemeral-fork";
     else mode = "ephemeral";
   }
 
   const task = nonFlags.join(" ").trim();
-  if (!task) return "Usage: /leader [--ephemeral|--persistent|--fork] [@agent] <task>";
+  if (!task)
+    return "Usage: /leader [--ephemeral|--persistent|--fork|--ephemeral-fork] [@agent] <task>";
 
   return { task, mode, agent: agentName };
 };
@@ -496,6 +475,7 @@ const leadersExtension = (pi: ExtensionAPI): void => {
       "  - ephemeral (default): one-shot, no saved session. Best for exploration, research, reviews, Q&A.",
       "  - persistent: saved session for follow-up, continuity, or audit.",
       "  - fork: branch from parent context. Best for context-aware tasks like continuing a discussion.",
+      "  - ephemeral-fork: branch from parent context for a one-shot run, then delete the branch after completion.",
       "",
       "Agents: Use the 'list' action to discover available agent profiles, or omit agent for the default.",
     ].join("\n"),
@@ -546,6 +526,10 @@ const leadersExtension = (pi: ExtensionAPI): void => {
             description:
               "Branch from parent context. Best for context-aware tasks like continuing a discussion.",
           }),
+          Type.Literal("ephemeral-fork", {
+            description:
+              "Branch from parent context for a one-shot foreground or async run, then delete the temporary branch after completion.",
+          }),
         ]),
       ),
       agent: Type.Optional(
@@ -558,6 +542,9 @@ const leadersExtension = (pi: ExtensionAPI): void => {
           Type.Literal("run", { description: "Run a leader (default)." }),
           Type.Literal("list", { description: "List available agent profiles." }),
           Type.Literal("status", { description: "Check status of an async leader run." }),
+          Type.Literal("cleanup", {
+            description: "Retry pending async leader temporary session cleanup.",
+          }),
         ]),
       ),
       async: Type.Optional(
@@ -616,11 +603,28 @@ const leadersExtension = (pi: ExtensionAPI): void => {
                 : r.status === "running"
                   ? "⏳"
                   : "⊘";
-          return `${icon} ${r.id.slice(0, 8)} ${r.agent} ${r.status} — ${r.task.slice(0, 50)}`;
+          const cleanup = hasPendingSessionCleanup(r) ? " · cleanup pending" : "";
+          return `${icon} ${r.id.slice(0, 8)} ${r.agent} ${r.status}${cleanup} — ${r.task.slice(0, 50)}`;
         });
         return {
           content: [{ type: "text", text: `Async leader runs:\n\n${lines.join("\n")}` }],
           details: { runs },
+        };
+      }
+
+      // ── Cleanup action ──────────────────────────────────────────────
+      if (params.action === "cleanup") {
+        const summary = retryPendingAsyncSessionCleanups();
+        const text =
+          `Async cleanup retried.\n` +
+          `Retried: ${summary.retried}\n` +
+          `Succeeded: ${summary.succeeded}\n` +
+          `Failed: ${summary.failed}\n` +
+          `Pending: ${summary.pending}`;
+
+        return {
+          content: [{ type: "text", text }],
+          details: { cleanup: summary },
         };
       }
 
@@ -667,11 +671,16 @@ const leadersExtension = (pi: ExtensionAPI): void => {
 
       if (params.async) {
         const asyncRun = await spawnAsyncLeader(delegatedTask, ctx, agent, mode, budget);
+        const text =
+          asyncRun.status === "failed"
+            ? `Leader failed to start in background.\nID: ${asyncRun.id}\nAgent: ${asyncRun.agent}\nMode: ${asyncRun.mode}\nStatus: ${asyncRun.status}\n\n${asyncRun.result?.finalOutput ?? "Unknown async leader startup failure."}`
+            : `Leader started in background.\nID: ${asyncRun.id}\nAgent: ${asyncRun.agent}\nMode: ${asyncRun.mode}\nStatus: ${asyncRun.status}\n\nCheck status with: leader({ action: "status", id: "${asyncRun.id}" })`;
+
         return {
           content: [
             {
               type: "text",
-              text: `Leader started in background.\nID: ${asyncRun.id}\nAgent: ${asyncRun.agent}\nMode: ${asyncRun.mode}\nStatus: ${asyncRun.status}\n\nCheck status with: leader({ action: "status", id: "${asyncRun.id}" })`,
+              text,
             },
           ],
           details: { run: asyncRun, budget, contract },

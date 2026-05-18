@@ -18,14 +18,9 @@ import type {
   LeaderSingleResult,
 } from "./types.js";
 import { createStreamParseState, getFinalOutput, processStreamChunk } from "./stream-parser.js";
-import {
-  CHILD_ENV,
-  makeSessionFile,
-  writePromptToTempFile,
-  cleanupTempFile,
-  ASYNC_DIR,
-} from "./utils.js";
+import { CHILD_ENV, writePromptToTempFile, cleanupTempFile, ASYNC_DIR } from "./utils.js";
 import { buildLeaderArgs } from "./spawn-builder.js";
+import { resolveLeaderSessionFile } from "./session.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -41,6 +36,8 @@ export interface LeaderAsyncRun {
   result?: LeaderSingleResult;
   pid?: number;
   sessionDir: string;
+  sessionFile?: string;
+  cleanupSessionFile?: boolean;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -70,7 +67,15 @@ const writeAsyncStatus = (run: LeaderAsyncRun): void => {
   ensureAsyncDir();
   const dir = path.join(ASYNC_DIR, run.id);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(statusPath(run.id), JSON.stringify(run, null, 2), "utf-8");
+  const file = statusPath(run.id);
+  const tmpFile = path.join(dir, `.status.${process.pid}.${randomUUID()}.tmp`);
+
+  try {
+    fs.writeFileSync(tmpFile, JSON.stringify(run, null, 2), "utf-8");
+    fs.renameSync(tmpFile, file);
+  } finally {
+    fs.rmSync(tmpFile, { force: true });
+  }
 };
 
 export const listAsyncRuns = (): LeaderAsyncRun[] => {
@@ -86,18 +91,162 @@ export const listAsyncRuns = (): LeaderAsyncRun[] => {
 
 // ── Cleanup ────────────────────────────────────────────────────────────────────
 
+const terminalStatuses = new Set<LeaderAsyncRun["status"]>(["completed", "failed", "cancelled"]);
+
+export const isPidRunning = (pid: number | undefined): boolean => {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
+const cleanupAsyncSessionFile = (
+  run: Pick<LeaderAsyncRun, "sessionFile" | "cleanupSessionFile">,
+): boolean => {
+  if (!run.cleanupSessionFile || !run.sessionFile) return true;
+
+  try {
+    fs.rmSync(run.sessionFile, { force: true });
+    return true;
+  } catch {
+    // Cleanup is best-effort; status/result updates should not fail because
+    // a temporary fork file could not be removed immediately. Keep cleanup
+    // metadata so a later recovery pass can retry.
+    return false;
+  }
+};
+
+const hideCleanupSessionFile = (
+  result: LeaderSingleResult,
+  run: Pick<LeaderAsyncRun, "cleanupSessionFile">,
+): LeaderSingleResult => (run.cleanupSessionFile ? { ...result, sessionFile: undefined } : result);
+
+export const hasPendingSessionCleanup = (
+  run: Pick<LeaderAsyncRun, "cleanupSessionFile" | "sessionFile">,
+): boolean => run.cleanupSessionFile === true && !!run.sessionFile;
+
+export interface AsyncCleanupSummary {
+  retried: number;
+  succeeded: number;
+  failed: number;
+  pending: number;
+}
+
+export const retryPendingAsyncSessionCleanups = (): AsyncCleanupSummary => {
+  const summary: AsyncCleanupSummary = { retried: 0, succeeded: 0, failed: 0, pending: 0 };
+
+  for (const run of listAsyncRuns()) {
+    if (!terminalStatuses.has(run.status) || !hasPendingSessionCleanup(run)) continue;
+
+    summary.retried += 1;
+    const cleanupSucceeded = cleanupAsyncSessionFile(run);
+
+    if (cleanupSucceeded) {
+      run.sessionFile = undefined;
+      summary.succeeded += 1;
+    } else {
+      summary.failed += 1;
+    }
+
+    if (hasPendingSessionCleanup(run)) summary.pending += 1;
+    writeAsyncStatus(run);
+  }
+
+  return summary;
+};
+
 export const cleanupOldAsyncRuns = (): void => {
   if (!fs.existsSync(ASYNC_DIR)) return;
   const now = Date.now();
+
   for (const entry of fs.readdirSync(ASYNC_DIR)) {
     const run = readAsyncStatus(entry);
     if (!run) continue;
-    const completedAt = run.completedAt ? new Date(run.completedAt).getTime() : now;
-    if (now - completedAt > ASYNC_MAX_AGE_MS) {
+
+    const startedAt = new Date(run.startedAt).getTime();
+    const completedAt = run.completedAt ? new Date(run.completedAt).getTime() : undefined;
+    const referenceTime = completedAt ?? startedAt;
+    const isOlderThanMaxAge = now - referenceTime > ASYNC_MAX_AGE_MS;
+    const isStaleRunning = run.status === "running" && !isPidRunning(run.pid);
+
+    const shouldCleanup = terminalStatuses.has(run.status) || isStaleRunning;
+    const hadPendingCleanup = hasPendingSessionCleanup(run);
+    const cleanupSucceeded = shouldCleanup ? cleanupAsyncSessionFile(run) : true;
+
+    if (cleanupSucceeded && hadPendingCleanup) {
+      run.sessionFile = undefined;
+    }
+
+    if (isStaleRunning) {
+      run.status = "failed";
+      run.completedAt = new Date().toISOString();
+      run.exitCode = 1;
+      run.result = createStaleAsyncResult(run);
+      writeAsyncStatus(run);
+    } else if (shouldCleanup && hadPendingCleanup) {
+      writeAsyncStatus(run);
+    }
+
+    if (terminalStatuses.has(run.status) && isOlderThanMaxAge && !hasPendingSessionCleanup(run)) {
       fs.rmSync(path.join(ASYNC_DIR, entry), { recursive: true, force: true });
     }
   }
 };
+
+// ── Result Helpers ────────────────────────────────────────────────────────────
+
+const createAsyncSessionErrorResult = (
+  agent: LeaderAgentConfig,
+  task: string,
+  mode: LeaderSessionMode,
+  error: string,
+): LeaderSingleResult => ({
+  agent: agent.name,
+  agentSource: agent.source,
+  task,
+  exitCode: 1,
+  signal: null,
+  mode,
+  sessionFile: undefined,
+  usage: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+    contextTokens: 0,
+    turns: 0,
+  },
+  displayItems: [],
+  finalOutput: error,
+  stderr: "",
+});
+
+const createStaleAsyncResult = (run: LeaderAsyncRun): LeaderSingleResult => ({
+  agent: run.agent,
+  agentSource: "default",
+  task: run.task,
+  exitCode: 1,
+  signal: null,
+  mode: run.mode,
+  sessionFile: run.cleanupSessionFile ? undefined : run.sessionFile,
+  usage: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+    contextTokens: 0,
+    turns: 0,
+  },
+  displayItems: [],
+  finalOutput:
+    "Async leader marked failed during cleanup because its process is no longer running.",
+  stderr: "",
+});
 
 // ── Async Leader Spawn ────────────────────────────────────────────────────────
 
@@ -117,19 +266,31 @@ export const spawnAsyncLeader = async (
   ensureAsyncDir();
   fs.mkdirSync(runDir, { recursive: true });
 
-  const sessionFile = mode !== "ephemeral" ? makeSessionFile("leader-async") : undefined;
+  const sessionResolution = resolveLeaderSessionFile(ctx, mode, {
+    persistentPrefix: "leader-async",
+  });
+  const { sessionFile } = sessionResolution;
 
   const run: LeaderAsyncRun = {
     id: runId,
     agent: agent.name,
     task,
     mode,
-    status: "running",
+    status: sessionResolution.error ? "failed" : "running",
     startedAt: new Date().toISOString(),
+    completedAt: sessionResolution.error ? new Date().toISOString() : undefined,
+    exitCode: sessionResolution.error ? 1 : undefined,
+    result: sessionResolution.error
+      ? createAsyncSessionErrorResult(agent, task, mode, sessionResolution.error)
+      : undefined,
     sessionDir: runDir,
+    sessionFile: sessionResolution.sessionFile,
+    cleanupSessionFile: sessionResolution.cleanupSessionFile,
   };
 
   writeAsyncStatus(run);
+
+  if (sessionResolution.error) return run;
 
   // Write system prompt to temp file if agent has one
   let tmpPromptDir: string | null = null;
@@ -177,7 +338,12 @@ export const spawnAsyncLeader = async (
     current.exitCode = code ?? 0;
 
     // Parse the log file for structured result
-    current.result = parseLogForResult(runId, agent, task, mode, sessionFile, code ?? 0);
+    const result = parseLogForResult(runId, agent, task, mode, sessionFile, code ?? 0);
+    current.result = hideCleanupSessionFile(result, current);
+    const cleanupSucceeded = cleanupAsyncSessionFile(current);
+    if (cleanupSucceeded && current.cleanupSessionFile) {
+      current.sessionFile = undefined;
+    }
     writeAsyncStatus(current);
 
     // Clean up temp prompt file and log stream
@@ -192,7 +358,7 @@ export const spawnAsyncLeader = async (
     current.status = "failed";
     current.completedAt = new Date().toISOString();
     current.exitCode = 1;
-    current.result = {
+    const result: LeaderSingleResult = {
       agent: agent.name,
       agentSource: agent.source,
       task,
@@ -213,6 +379,11 @@ export const spawnAsyncLeader = async (
       finalOutput: `Async leader failed to start: ${error.message}`,
       stderr: error.message,
     };
+    current.result = hideCleanupSessionFile(result, current);
+    const cleanupSucceeded = cleanupAsyncSessionFile(current);
+    if (cleanupSucceeded && current.cleanupSessionFile) {
+      current.sessionFile = undefined;
+    }
     writeAsyncStatus(current);
     logStream.close();
   });
@@ -303,6 +474,9 @@ export const formatAsyncStatus = (run: LeaderAsyncRun): string => {
   let text = `${statusIcon} leader ${run.agent} [${run.id.slice(0, 8)}] ${run.status}${duration}`;
   text += `\n    Task: ${run.task.length > 80 ? `${run.task.slice(0, 80)}...` : run.task}`;
   text += `\n    Mode: ${run.mode}`;
+  if (hasPendingSessionCleanup(run)) {
+    text += `\n    Cleanup: pending temporary session deletion`;
+  }
 
   if (run.result) {
     const usage = run.result.usage;
