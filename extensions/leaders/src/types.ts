@@ -7,7 +7,7 @@
 
 // ── Session Modes ──────────────────────────────────────────────────────────
 
-export type LeaderSessionMode = "ephemeral" | "persistent" | "fork";
+export type LeaderSessionMode = "ephemeral" | "persistent" | "fork" | "ephemeral-fork";
 
 // ── Usage & Display ────────────────────────────────────────────────────────
 
@@ -125,7 +125,7 @@ export const DEFAULT_BUDGET_POLICY: LeaderBudgetPolicy = {
 
 // ── Tool Parameter Types ────────────────────────────────────────────────────
 
-export type LeaderAction = "run" | "list" | "status";
+export type LeaderAction = "run" | "list" | "status" | "cleanup";
 
 // ── Default Agent ──────────────────────────────────────────────────────────
 

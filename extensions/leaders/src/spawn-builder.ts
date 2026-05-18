@@ -22,7 +22,7 @@ export const buildLeaderArgs = (
   tmpPromptPath?: string | null,
 ): string[] => {
   const sessionArgs =
-    mode === "fork" && sessionFile
+    (mode === "fork" || mode === "ephemeral-fork") && sessionFile
       ? ["--session", sessionFile]
       : mode === "persistent" && sessionFile
         ? ["--session", sessionFile]
