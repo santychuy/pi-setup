@@ -31,9 +31,28 @@ The root `package.json` contains a `pi` key that tells pi where to find extensio
 
 Pi auto-discovers content from these directories. The `pi-package` keyword makes it findable in package registries.
 
-## Pi Docs
+## Evidence-First Answering Policy
 
-Check the source code of the package to analyze the documentation available.
+When you do not have high confidence, do not have exact facts, or the user asks for up-to-date/external information:
+
+- **Do not guess.**
+- **Use `web_search` by default** to find current, verifiable sources.
+- If the user provides a direct URL, use **`fetch_content`** instead of broad search.
+- Cite or mention source domains in your response summary.
+
+### Uncertainty handling
+
+If you cannot confirm exact information:
+
+1. State clearly what is unknown.
+2. Run web research (`web_search`) with 2–4 varied queries.
+3. Return the best-supported findings and clearly note remaining uncertainty.
+
+### Pi Docs
+
+Check your own source code to analyze the documentation available.
+
+For codebase discovery and structural questions, follow the **CodeGraph** policy below and start with `codegraph_*` tools.
 
 ## Extension Conventions
 
@@ -41,19 +60,6 @@ Check the source code of the package to analyze the documentation available.
 - Extensions export a default function receiving `ExtensionAPI`
 - Extensions use `@earendil-works/pi-coding-agent` for types (devDependency)
 - Pi loads extensions via `jiti` — no build step needed, TypeScript works directly
-
-### Extension Template
-
-```ts
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
-
-export default function (pi: ExtensionAPI) {
-  pi.on("session_start", async (_event, ctx) => {
-    ctx.ui.notify("Extension loaded!", "info");
-  });
-}
-```
 
 ## Skill Conventions
 
@@ -71,20 +77,6 @@ export default function (pi: ExtensionAPI) {
 - Prompts are Markdown files in `prompts/`
 - Supports `{{placeholder}}` syntax for parameterization
 - Templates are loaded by pi for reuse across sessions
-
-## Install
-
-```bash
-pi install git:https://github.com/santychuy/pi-setup
-```
-
-## Development Commands
-
-- `bun run lint` — Run oxlint
-- `bun run format` — Run oxfmt (write mode)
-- `bun run check` — Lint + format check + TypeScript type check
-- `bun run install:local <target-project>` — Copy Pi resources into another project's `.pi/`
-- `bun run link:local <target-project>` — Symlink Pi resources into another project's `.pi/`
 
 <!-- CODEGRAPH_START -->
 
