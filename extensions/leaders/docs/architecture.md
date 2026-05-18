@@ -101,21 +101,26 @@ extensions/leaders/
 
     tracker.ts          In-memory subagent state tracker
       ├─ LeaderStatus type: spawning | running | completed | failed | cancelled
-      ├─ LeaderEntry interface: id, agent, task, mode, status, timestamps
+      ├─ LeaderSource type: foreground | async
+      ├─ LeaderEntry interface: id, agent, task, mode, status, source, asyncRunId, timestamps
       ├─ LeaderTracker class:
-      │   ├─ add(agent, task, mode) → entry id
+      │   ├─ add(agent, task, mode) → entry id (foreground)
+      │   ├─ addAsync(run) → entry id (async, deduplicates by asyncRunId)
       │   ├─ markRunning(id) / markCompleted(id, exitCode)
       │   ├─ markFailed(id, exitCode?) / markCancelled(id)
       │   ├─ getAll() / get(id) / hasActive
-      │   ├─ pruneCompleted() → remove terminal entries
+      │   ├─ pruneCompleted() → remove terminal entries (async gets 10s grace)
+      │   ├─ syncAsyncRuns(runs) → reconcile with disk-based async statuses
       │   ├─ clear() → remove all entries
       │   └─ onUpdate(callback) → register change listener
 
     widget.ts            TUI widget renderer
-      ├─ STATUS_ICONS: ◌ ● ✓ ✗ ⊘  (maps status → symbol)
+      ├─ FOREGROUND_STATUS_ICONS: ◌ ● ✓ ✗ ⊘  (maps status → symbol)
+      ├─ ASYNC_STATUS_ICONS: ◌ ⏳ ✓ ✗ ⊘  (running uses ⏳ for async)
       ├─ STATUS_COLORS: maps status → theme.fg() color function
       └─ renderLeadersWidget(entries, theme) → string[] | undefined
           Returns styled lines for each entry, or undefined when empty
+          Async entries show a "bg" badge and use ⏳ for running status
 
     utils.ts            Shared utilities
       ├─ SESSION_DIR, ASYNC_DIR  → path constants
@@ -209,7 +214,13 @@ extensions/leaders/
    - For `ephemeral-fork`, cleanup is attempted and `sessionFile` is cleared only after successful deletion
    - If cleanup fails, metadata is kept for retry
 
-5. Parent checks back later:
+5. Parent polls async run status every 2 seconds
+   - `tracker.syncAsyncRuns()` reads all status.json files and updates tracker entries
+   - Widget re-renders on status changes
+   - Polling stops when no active async runs remain
+   - Completed async entries show in widget for 10 seconds before being pruned
+
+6. Parent can also check status manually:
    leader({ action: "status", id: "<run-id>" })
    → reads status.json → returns formatted result
 ```
@@ -347,28 +358,42 @@ interface LeaderSingleResult {
 
 ## TUI Widget
 
-The leaders extension renders a compact status bar above the input editor showing active and recently-completed subagents.
+The leaders extension renders a compact status bar above the input editor showing active and recently-completed subagents, both foreground and async (background).
 
 ### How it works
 
-1. A global `LeaderTracker` instance tracks the lifecycle of every foreground leader run
-2. When a leader is spawned, `tracker.add()` creates a "spawning" entry
-3. When the child process starts, `tracker.markRunning()` transitions it
-4. On completion/failure/cancellation, the tracker transitions to the terminal state
+1. A global `LeaderTracker` instance tracks the lifecycle of every leader run (foreground and async)
+2. For **foreground** runs: `tracker.add()` creates a "spawning" entry, then `tracker.markRunning()`/`markCompleted()`/`markFailed()`/`markCancelled()` transition it
+3. For **async** runs: `tracker.addAsync(run)` creates an entry from the `LeaderAsyncRun` object returned by `spawnAsyncLeader()`
+4. A polling interval (2s) reads all async run statuses from disk and calls `tracker.syncAsyncRuns()` to update entries in-place
 5. The tracker's `onUpdate` callback triggers `updateWidget()`, which reads all entries, renders them with theme colors, and calls `ctx.ui.setWidget(WIDGET_KEY, lines, { placement: "aboveEditor" })`
-6. On `turn_end` and `agent_end`, completed entries are pruned so the widget disappears when no longer relevant
+6. The `onUpdate` callback also starts the polling interval on demand whenever an active async entry is detected
+7. On `turn_end` and `agent_end`, completed foreground entries are pruned; completed async entries are pruned only after being terminal for 10 seconds (so they stay visible even when no foreground turn is active)
+8. All entries are cleared on `session_start` (but existing async runs from disk are immediately re-synced)
+9. The polling interval is cleaned up on `session_shutdown`
 
 ### Widget rendering
 
 Each entry is rendered as:
 
+**Foreground:**
+
 ```
 ● scout Analyze the auth module for... ephemeral
 ```
 
+**Async (background):**
+
+```
+⏳ bg scout Analyze the auth module for... ephemeral
+```
+
 Where:
 
-- `●` = status icon (◌ spawning, ● running, ✓ completed, ✗ failed, ⊘ cancelled)
+- `●`/`⏳` = status icon, different for foreground vs async:
+  - Foreground: ◌ spawning, ● running, ✓ completed, ✗ failed, ⊘ cancelled
+  - Async: ◌ spawning, ⏳ running, ✓ completed, ✗ failed, ⊘ cancelled
+- `bg` = badge marking this as a background (async) run (dim color)
 - `scout` = agent name (muted color)
 - Task text (truncated to 60 chars)
 - `ephemeral` = session mode (dim color)
@@ -379,16 +404,18 @@ Status icons use theme-aware colors:
 
 ### Cleanup strategy
 
-- Completed/failed/cancelled entries are pruned on `turn_end` and `agent_end`
+- Completed/failed/cancelled **foreground** entries are pruned on `turn_end` and `agent_end`
+- Completed/failed/cancelled **async** entries are pruned after being terminal for 10 seconds, checked during polling and during `turn_end`/`agent_end`
 - All entries are cleared on `session_start`
 - The widget is removed (set to `undefined`) when no entries remain
+- The 10-second grace period for async entries ensures background completions remain visible even when no foreground turn is happening
 
 ## What's not yet implemented
 
 These are ideas for future iterations:
 
 - **Interactive widget**: Arrow-key cycling through entries, Enter to view details
-- **Async run polling**: Show background leaders in the widget with status polling
+- **Async run polling**: ✅ Implemented — background leaders appear in the widget and poll status from disk every 2 seconds
 - **Expand/collapse full output**: Click or key to expand a leader's full result in a TUI overlay
 - **Parallel leaders**: run multiple leaders concurrently with `tasks: [...]`
 - **Chain execution**: sequential `scout → planner → worker` with `{previous}` template substitution

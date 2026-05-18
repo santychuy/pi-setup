@@ -453,16 +453,49 @@ const getCurrentDepth = (): number => {
 const isDepthAllowed = (policy: LeaderBudgetPolicy): boolean =>
   getCurrentDepth() < policy.limits.maxDelegationDepth;
 
+const ASYNC_POLL_INTERVAL_MS = 2000;
+
 const leadersExtension = (pi: ExtensionAPI): void => {
   // ── Widget: re-render on tracker state changes ───────────────────────────
   // We store the latest ExtensionContext so the tracker callback can update
   // the widget even during streaming (no active event handler context).
   let latestCtx: ExtensionContext | null = null;
+  let asyncPollTimer: ReturnType<typeof setInterval> | null = null;
+
+  const ensurePolling = () => {
+    const needsPolling = tracker
+      .getAll()
+      .some((e) => e.source === "async" && (e.status === "running" || e.status === "spawning"));
+    if (needsPolling && !asyncPollTimer) {
+      asyncPollTimer = setInterval(pollAsyncRuns, ASYNC_POLL_INTERVAL_MS);
+    }
+  };
 
   tracker.onUpdate(() => {
     if (!latestCtx) return;
     updateWidget(latestCtx);
+    ensurePolling();
   });
+
+  // ── Async poll: sync async run status from disk ──────────────────────────
+  const pollAsyncRuns = () => {
+    if (!latestCtx) return;
+    const runs = listAsyncRuns();
+    tracker.syncAsyncRuns(runs);
+    const hasActive = tracker
+      .getAll()
+      .some((e) => e.source === "async" && (e.status === "running" || e.status === "spawning"));
+    // Always prune completed async entries on poll
+    tracker.pruneCompleted();
+    updateWidget(latestCtx);
+
+    // Stop polling when there are no more active async runs and
+    // we previously had active ones (or just started polling).
+    if (!hasActive && asyncPollTimer) {
+      clearInterval(asyncPollTimer);
+      asyncPollTimer = null;
+    }
+  };
 
   // ── Tool registration ───────────────────────────────────────────────────
   pi.registerTool({
@@ -671,6 +704,11 @@ const leadersExtension = (pi: ExtensionAPI): void => {
 
       if (params.async) {
         const asyncRun = await spawnAsyncLeader(delegatedTask, ctx, agent, mode, budget);
+
+        // Track the async run in the widget
+        tracker.addAsync(asyncRun);
+        updateWidget(ctx);
+
         const text =
           asyncRun.status === "failed"
             ? `Leader failed to start in background.\nID: ${asyncRun.id}\nAgent: ${asyncRun.agent}\nMode: ${asyncRun.mode}\nStatus: ${asyncRun.status}\n\n${asyncRun.result?.finalOutput ?? "Unknown async leader startup failure."}`
@@ -836,10 +874,29 @@ const leadersExtension = (pi: ExtensionAPI): void => {
     if (process.env[CHILD_ENV] === "1") return;
     latestCtx = ctx;
     rosterInjected = false;
+
+    // Clear previous state
+    if (asyncPollTimer) {
+      clearInterval(asyncPollTimer);
+      asyncPollTimer = null;
+    }
     cleanupOldAsyncRuns();
     tracker.clear();
+
+    // Only load actively running async runs into the tracker.
+    // Completed/failed runs from previous sessions should not appear
+    // in a fresh session's widget — they are available via
+    // leader({ action: "status" }) if the user needs them.
+    const existingRuns = listAsyncRuns();
+    const activeRuns = existingRuns.filter((r) => r.status === "running");
+    tracker.syncAsyncRuns(activeRuns);
     updateWidget(ctx);
-    ctx.ui.notify("Leaders extension loaded", "info");
+
+    // Start polling only if there are still-running async runs
+    // that were spawned in a previous session.
+    if (activeRuns.length > 0) {
+      asyncPollTimer = setInterval(pollAsyncRuns, ASYNC_POLL_INTERVAL_MS);
+    }
   });
 
   // ── Prune completed entries after each turn ────────────────────────────────
@@ -856,6 +913,14 @@ const leadersExtension = (pi: ExtensionAPI): void => {
     latestCtx = ctx;
     tracker.pruneCompleted();
     updateWidget(ctx);
+  });
+
+  // ── Clean up polling on session shutdown ────────────────────────────────
+  pi.on("session_shutdown", async () => {
+    if (asyncPollTimer) {
+      clearInterval(asyncPollTimer);
+      asyncPollTimer = null;
+    }
   });
 };
 

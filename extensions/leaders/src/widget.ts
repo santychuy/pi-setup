@@ -2,7 +2,7 @@
  * Leaders extension — TUI widget renderer.
  *
  * Renders a compact status bar above the editor showing active
- * and recently-completed leader subagents.
+ * and recently-completed leader subagents (both foreground and async).
  *
  * Uses the Pi theme system for consistent styling.
  */
@@ -12,9 +12,17 @@ import type { LeaderEntry, LeaderStatus } from "./tracker.js";
 
 // ── Status Icons ─────────────────────────────────────────────────────────────
 
-const STATUS_ICONS: Record<LeaderStatus, string> = {
+const FOREGROUND_STATUS_ICONS: Record<LeaderStatus, string> = {
   spawning: "◌",
   running: "●",
+  completed: "✓",
+  failed: "✗",
+  cancelled: "⊘",
+};
+
+const ASYNC_STATUS_ICONS: Record<LeaderStatus, string> = {
+  spawning: "◌",
+  running: "⏳",
   completed: "✓",
   failed: "✗",
   cancelled: "⊘",
@@ -43,11 +51,19 @@ export const renderLeadersWidget = (
   if (entries.length === 0) return undefined;
 
   return entries.map((entry) => {
-    const icon = STATUS_COLORS[entry.status](STATUS_ICONS[entry.status], theme);
+    const icons = entry.source === "async" ? ASYNC_STATUS_ICONS : FOREGROUND_STATUS_ICONS;
+    const icon = STATUS_COLORS[entry.status](icons[entry.status], theme);
     const agentName = theme.fg("muted", entry.agent);
     const task = entry.task;
     const modeTag = theme.fg("dim", entry.mode);
 
-    return `${icon} ${agentName} ${task} ${modeTag}`;
+    const badge = entry.source === "async" ? theme.fg("dim", "bg") : "";
+
+    // Format: icon [bg] agent task mode  or  icon agent task mode
+    const parts = [icon];
+    if (badge) parts.push(badge);
+    parts.push(agentName, task, modeTag);
+
+    return parts.join(" ");
   });
 };
