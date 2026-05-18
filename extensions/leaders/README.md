@@ -5,7 +5,7 @@ Leader subagents for Pi — delegate focused tasks to child Pi processes with is
 ## Features
 
 - **Agent profiles**: Named specialists (scout, planner, reviewer, worker, oracle) with custom system prompts, tools, and models
-- **Session modes**: Ephemeral (default), persistent (saved), and fork (branch from parent context)
+- **Session modes**: Ephemeral (default), persistent (saved), fork (saved branch), and ephemeral-fork (temporary branch with cleanup/recovery)
 - **Structured results**: Full usage stats, tool calls, model info, stop reasons — not just text
 - **Async/background**: Run leaders in the background while the parent continues working
 - **Live streaming**: Real-time progress updates during foreground runs
@@ -75,12 +75,17 @@ Ask Pi naturally, or call the `leader` tool directly:
 { "action": "status", "id": "abc123..." }
 ```
 
+```json
+{ "action": "cleanup" }
+```
+
 ### Slash command
 
 ```
 /leader inspect this repository
 /leader --persistent @reviewer review this plan
 /leader --fork @worker continue this refactor
+/leader --ephemeral-fork @reviewer review using current context without saving the child session
 ```
 
 ## Agent Profiles
@@ -127,11 +132,25 @@ Saves session to `~/.pi/agent/sessions/leaders/`. Use for follow-up, continuity,
 
 ### Fork
 
-Branches from the parent's current conversation. The leader inherits full context. Best for context-aware tasks: continuing a discussion, reviewing in-context code, building on a plan.
+Branches from the parent's current conversation. The leader inherits full context and appends its work to the branched session file. Best for context-aware tasks: continuing a discussion, reviewing in-context code, building on a plan.
+
+Fork requires the parent session to be persisted and have a current leaf. If that is not available, the run fails clearly instead of silently falling back to another mode.
+
+### Ephemeral fork
+
+Branches from the parent's current conversation so the leader gets full context, then deletes the branched child session after the child exits. Best for context-aware one-shot tasks where only the final answer should remain.
+
+In async mode, cleanup metadata is stored with the async run so interrupted parents can retry deletion on the next session start or via `leader({ action: "cleanup" })`.
 
 ## Background/Async
 
-Add `async: true` to run in the background:
+Add `async: true` to run in the background. Async is an execution mode and can be combined with any session mode. Async `fork` uses the same persisted branched-session behavior as foreground `fork`.
+
+Async `ephemeral-fork` creates a temporary branch, runs the detached child with parent context, and records cleanup metadata in `status.json`.
+
+Cleanup is attempted when the child closes, when the child fails to start, when a later parent session detects stale/interrupted async runs, or when `leader({ action: "cleanup" })` is called.
+
+If cleanup fails, async run metadata is kept so cleanup can be retried later. Old async run directories are only pruned after their temporary session cleanup has succeeded or no cleanup is required. If status shows `Cleanup: pending`, the leader result is terminal but the temporary fork session file still needs deletion retry.
 
 ```json
 { "task": "Analyze the codebase architecture", "agent": "scout", "async": true }
@@ -165,6 +184,7 @@ extensions/leaders/
     stream-parser.ts    # JSON event stream parsing
     format.ts           # Result formatting and display
     spawn-builder.ts    # CLI arg builder (shared by sync/async)
+    session.ts          # Session mode resolution (shared by sync/async)
     async.ts            # Background execution and status tracking
     utils.ts            # Paths, temp files, constants
 ```
@@ -188,4 +208,4 @@ Forked sessions use `SessionManager.open(parentFile).createBranchedSession(leafI
 
 ## Development
 
-See [`docs/learning-process.md`](docs/learning-process.md) for architecture notes and [`docs/session-modes-plan.md`](docs/session-modes-plan.md) for the session modes design.
+See [`docs/learning-process.md`](docs/learning-process.md) for architecture notes, [`docs/session-modes-plan.md`](docs/session-modes-plan.md) for the session modes design, and [`docs/async-ephemeral-fork-validation.md`](docs/async-ephemeral-fork-validation.md) for manual async ephemeral-fork validation.

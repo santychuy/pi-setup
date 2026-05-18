@@ -1,14 +1,22 @@
 # Leaders — Session Modes & Expected Results
 
-This document explains the three session modes, how each one works internally, and what results look like for each.
+This document explains the four session modes, how each one works internally, and what results look like for each.
 
 ## Session modes at a glance
 
-| Mode         | CLI flag                    | Session behavior                           | When to use                                                   |
-| ------------ | --------------------------- | ------------------------------------------ | ------------------------------------------------------------- |
-| `ephemeral`  | `--no-session`              | No file saved. Child runs and exits.       | One-shot tasks: exploration, reviews, Q&A                     |
-| `persistent` | `--session <new-file>`      | New empty session file created.            | Follow-up, continuity, audit trail                            |
-| `fork`       | `--session <branched-file>` | Branch from parent's current conversation. | Context-aware tasks: continue a discussion, review in context |
+| Mode             | CLI flag                    | Session behavior                                                                             | When to use                                                   |
+| ---------------- | --------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `ephemeral`      | `--no-session`              | No file saved. Child runs and exits.                                                         | One-shot tasks: exploration, reviews, Q&A                     |
+| `persistent`     | `--session <new-file>`      | New empty session file created.                                                              | Follow-up, continuity, audit trail                            |
+| `fork`           | `--session <branched-file>` | Branch from parent's current conversation, saved.                                            | Context-aware tasks: continue a discussion, review in context |
+| `ephemeral-fork` | `--session <branched-file>` | Branch from parent, delete after run; async stores cleanup metadata and retries on recovery. | Context-aware one-shot tasks                                  |
+
+Another way to view the modes:
+
+|                     | No parent context | Parent context   |
+| ------------------- | ----------------- | ---------------- |
+| Not saved after run | `ephemeral`       | `ephemeral-fork` |
+| Saved after run     | `persistent`      | `fork`           |
 
 ## Ephemeral mode
 
@@ -139,6 +147,27 @@ I've continued the refactor based on our earlier discussion. Here's what I chang
 The session file is saved for inspection.
 ```
 
+## Ephemeral fork mode
+
+`ephemeral-fork` uses the same branch creation as `fork`, so the child receives the full parent context. The difference is cleanup: after the child exits, fails, or is aborted, the parent deletes the branched child session file.
+
+Expected behavior:
+
+```
+Leader ✓ reviewer completed.
+Mode: ephemeral-fork
+
+Usage: 2 turns ↑18.2k ↓1.1k R8k $0.0210 claude-sonnet-4-5
+
+The plan is sound, but I would tighten the rollback path...
+```
+
+No `Session:` line is shown in the final result because the temporary branch is deleted before the result is returned.
+
+For async runs, the temporary branch is deleted when the child closes or fails to start. The async status file stores cleanup metadata so deletion can be retried if the parent process is interrupted or deletion fails.
+
+Cleanup metadata is retained until deletion succeeds. This means a terminal async run may remain on disk past the normal pruning window if its temporary fork cleanup is still pending.
+
 ### When to choose fork
 
 - "Continue this refactor with the context we discussed"
@@ -156,11 +185,13 @@ Fork returns an error result (not a crash) when:
 | Parent has no entries (`getLeafId()` returns undefined)                              | Same as above                                                                                                |
 | Session file doesn't exist or can't be read                                          | Same as above                                                                                                |
 
-When fork fails, the tool still returns a valid `LeaderSingleResult` with `exitCode: 1` and the error message as `finalOutput`. The parent agent can see this and decide to retry with ephemeral or persistent mode.
+When fork creation fails, foreground `fork` and `ephemeral-fork` runs return a valid `LeaderSingleResult` with `exitCode: 1` and the error message as `finalOutput`. Async `fork` and `ephemeral-fork` write a failed `status.json` with the same result shape and do not spawn a child process.
 
 ## Async mode (background)
 
-Async is not a session mode — it's an execution mode. You can combine it with any session mode.
+Async is not a session mode — it's an execution mode. You can combine it with any session mode. Async uses the same session resolution helper as foreground runs: ephemeral has no session, persistent creates a new saved session, fork creates a real persisted branched session from the parent context, and ephemeral-fork creates a real branched session that is cleaned up after the run.
+
+Async `ephemeral-fork` cleanup happens in three places: immediately on child close/error, as recovery on the next `session_start` for stale/interrupted runs, and via manual `leader({ action: "cleanup" })` retry. Cleanup is retriable: if deleting the temporary session file fails, `status.json` keeps the `sessionFile` path and the run directory is not pruned until cleanup succeeds.
 
 ### How it works
 
@@ -227,11 +258,11 @@ Async leader runs:
 ```
 ~/.pi/agent/sessions/leaders/async/
   └── <run-id>/
-      ├── status.json    → { id, agent, task, mode, status, startedAt, completedAt, exitCode, result, pid }
+      ├── status.json    → run metadata + result + optional ephemeral-fork cleanup metadata
       └── output.log     → raw child stdout/stderr
 ```
 
-Runs older than 24 hours are automatically cleaned up when a new session starts.
+Runs older than 24 hours are automatically cleaned up when a new session starts, except terminal runs with pending `ephemeral-fork` cleanup. Those are retained until the temporary branch is deleted successfully.
 
 ## Slash command reference
 
@@ -240,6 +271,7 @@ Runs older than 24 hours are automatically cleaned up when a new session starts.
 /leader --ephemeral <task>                    → ephemeral, default agent
 /leader --persistent <task>                  → persistent, default agent
 /leader --fork <task>                         → fork, default agent
+/leader --ephemeral-fork <task>               → ephemeral-fork, default agent
 /leader @scout <task>                         → ephemeral, scout agent
 /leader --fork @worker continue this refactor → fork, worker agent
 ```
@@ -261,4 +293,7 @@ Runs older than 24 hours are automatically cleaned up when a new session starts.
 
 // Check specific async run
 { "action": "status", "id": "abc-123" }
+
+// Retry pending async ephemeral-fork cleanup
+{ "action": "cleanup" }
 ```

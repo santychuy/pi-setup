@@ -30,7 +30,7 @@ Parent Pi session
           └─ spawn("pi", [...], { detached: true })
               └─ child Pi process (independent, parent continues)
                   └─ writes to ~/.pi/agent/sessions/leaders/async/<id>/
-                      ├─ status.json   → run metadata + results
+                      ├─ status.json   → run metadata + results + cleanup metadata
                       └─ output.log    → raw child output
 ```
 
@@ -43,7 +43,6 @@ extensions/leaders/
   index.ts              Extension entry point
     ├─ Tool + command registration
     ├─ Agent discovery (built-in + user)
-    ├─ Forked context (SessionManager.createBranchedSession)
     ├─ runLeader() — foreground execution (with tracker integration)
     ├─ Widget update helper (updateWidget)
     ├─ Slash command parser (/leader @scout --fork task)
@@ -61,7 +60,7 @@ extensions/leaders/
 
   src/
     types.ts            All shared type definitions
-      ├─ LeaderSessionMode: "ephemeral" | "persistent" | "fork"
+      ├─ LeaderSessionMode: "ephemeral" | "persistent" | "fork" | "ephemeral-fork"
       ├─ LeaderUsageStats: input/output/cache tokens, cost, turns
       ├─ LeaderDisplayItem: text | toolCall | toolResult
       ├─ LeaderSingleResult: full structured result
@@ -92,8 +91,13 @@ extensions/leaders/
       ├─ spawnAsyncLeader()   → detach child, return run ID
       ├─ readAsyncStatus()    → read status.json by run ID
       ├─ listAsyncRuns()      → list all async runs
-      ├─ cleanupOldAsyncRuns() → delete runs older than 24h
+      ├─ cleanupOldAsyncRuns() → delete old runs after pending cleanup succeeds
+      ├─ retryPendingAsyncSessionCleanups() → manual cleanup retry
       └─ formatAsyncStatus()  → human-readable run summary
+
+    session.ts          Shared session mode resolution
+      ├─ resolveLeaderSessionFile() → ephemeral/persistent/fork/ephemeral-fork setup
+      └─ createForkedSessionFile()  → SessionManager.createBranchedSession
 
     tracker.ts          In-memory subagent state tracker
       ├─ LeaderStatus type: spawning | running | completed | failed | cancelled
@@ -137,10 +141,11 @@ extensions/leaders/
 3. resolveAgent("reviewer", discovery)
    Finds the agent config or returns an error string
 
-4. Session setup
+4. Session setup via `resolveLeaderSessionFile()`
    mode = "ephemeral" → --no-session
    mode = "persistent" → --session <new-file>
    mode = "fork" → SessionManager.open(parentFile).createBranchedSession(leafId)
+   mode = "ephemeral-fork" → same branch setup as fork, then delete the branch during foreground cleanup
      If fork fails (no parent session) → return error result
 
 5. writePromptToTempFile(agent.name, agent.systemPrompt)
@@ -190,20 +195,38 @@ extensions/leaders/
 3. spawnAsyncLeader(task, ctx, agent, mode)
    - Creates run ID (UUID)
    - mkdir ~/.pi/agent/sessions/leaders/async/<id>/
-   - Writes initial status.json (status: "running")
+   - Resolves session mode with the same `resolveLeaderSessionFile()` helper used by foreground runs
+   - For `ephemeral-fork`, stores `sessionFile` and `cleanupSessionFile` in `status.json`
+   - Writes initial status.json (status: "running", or "failed" immediately if fork cannot be created)
    - spawn("pi", args, { detached: true })
    - proc.unref() → parent continues immediately
    - Returns { id, agent, task, mode, status: "running", ... }
 
 4. Child runs independently
    - stdout/stderr piped to output.log
-   - On exit → status.json updated with "completed"/"failed"
+   - On exit/error → status.json updated with "completed"/"failed"
    - Result parsed from log file into LeaderSingleResult
+   - For `ephemeral-fork`, cleanup is attempted and `sessionFile` is cleared only after successful deletion
+   - If cleanup fails, metadata is kept for retry
 
 5. Parent checks back later:
    leader({ action: "status", id: "<run-id>" })
    → reads status.json → returns formatted result
 ```
+
+## Async ephemeral-fork cleanup model
+
+Async `ephemeral-fork` uses a retriable cleanup model.
+
+Invariants:
+
+- `cleanupSessionFile === true && sessionFile` means cleanup is pending.
+- `sessionFile` is cleared only after the temporary branch file is deleted successfully.
+- Terminal async run directories are not pruned while cleanup is pending.
+- On `session_start`, stale/interrupted runs are detected and cleanup is retried.
+- `leader({ action: "cleanup" })` can retry pending cleanup manually.
+
+This prevents losing the only reference to a temporary fork session file if the parent process exits early or filesystem deletion fails.
 
 ## Agent profiles
 
@@ -267,7 +290,15 @@ Creates a real branched session from the parent's current conversation tree. Use
 
 Use cases: "continue this refactor with what we discussed," "review the plan we just made," "inspect the code we were talking about."
 
-**Fork fails gracefully** if the parent has no session file (e.g., running with `--no-session`) or no entries — returns an error result suggesting persistent or ephemeral mode instead.
+### Ephemeral fork
+
+Creates the same real branched session as fork. The child inherits full parent context during execution, and the parent deletes the branched child session file after the child exits, fails, or is aborted.
+
+Use cases: context-aware one-shot reviews, risk checks, scoped implementation advice, or any delegated task where the final answer matters but the child session should not be resumable.
+
+For async runs, `ephemeral-fork` stores cleanup metadata in `status.json`, deletes the branch on child close/error, and attempts recovery cleanup on the next `session_start` for interrupted or stale runs.
+
+**Fork modes fail gracefully** if the parent has no session file (e.g., running with `--no-session`) or no entries — returns an error result suggesting persistent or ephemeral mode instead.
 
 ## Structured results
 
@@ -280,8 +311,8 @@ interface LeaderSingleResult {
   task: string; // Original task text
   exitCode: number; // Child process exit code (0 = success)
   signal: NodeJS.Signals | null; // SIGTERM if aborted
-  mode: LeaderSessionMode; // "ephemeral" | "persistent" | "fork"
-  sessionFile?: string; // Path if persistent/fork
+  mode: LeaderSessionMode; // "ephemeral" | "persistent" | "fork" | "ephemeral-fork"
+  sessionFile?: string; // Path if persistent/fork; temporary path during ephemeral-fork execution
   model?: string; // Model the child actually used
   stopReason?: string; // "stop" | "error" | "aborted" | "length" | "toolUse"
   errorMessage?: string; // LLM error message if any
