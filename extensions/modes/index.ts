@@ -5,9 +5,9 @@ import {
   type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
+import { resolveEditorBorder, type Colorize } from "../shared/editor-border-resolver";
 
 type AgentMode = "default" | "plan";
-type Colorize = (text: string) => string;
 
 type ModeEditorOptions = {
   tui: TUI;
@@ -15,6 +15,7 @@ type ModeEditorOptions = {
   keybindings: KeybindingsManager;
   getMode: () => AgentMode;
   baseBorder: Colorize;
+  bashBorder: Colorize;
   planBorder: Colorize;
 };
 
@@ -42,30 +43,28 @@ Rules while Plan Mode is active:
 
 const isAgentMode = (value: unknown): value is AgentMode => value === "default" || value === "plan";
 
-const getModeBorder = ({
-  getMode,
-  baseBorder,
-  planBorder,
-}: Pick<ModeEditorOptions, "getMode" | "baseBorder" | "planBorder">): Colorize =>
-  getMode() === "plan" ? planBorder : baseBorder;
-
 const createModeAwareEditor = ({
   tui,
   theme,
   keybindings,
   getMode,
   baseBorder,
+  bashBorder,
   planBorder,
 }: ModeEditorOptions): CustomEditor => {
-  const editor = new CustomEditor(
-    tui,
-    { ...theme, borderColor: getModeBorder({ getMode, baseBorder, planBorder }) },
-    keybindings,
-  );
+  const editor = new CustomEditor(tui, { ...theme, borderColor: baseBorder }, keybindings);
 
   const applyModeBorder = (): void => {
-    editor.borderColor = getModeBorder({ getMode, baseBorder, planBorder });
+    editor.borderColor = resolveEditorBorder({
+      text: editor.getText(),
+      mode: getMode(),
+      baseBorder,
+      bashBorder,
+      planBorder,
+    });
   };
+
+  applyModeBorder();
 
   const baseHandleInput = editor.handleInput.bind(editor);
   const baseSetText = editor.setText.bind(editor);
@@ -168,6 +167,7 @@ export default function modesExtension(pi: ExtensionAPI): void {
         keybindings,
         getMode: () => mode,
         baseBorder: (text) => ctx.ui.theme.fg("borderMuted", text),
+        bashBorder: (text) => ctx.ui.theme.fg("warning", text),
         planBorder: (text) => ctx.ui.theme.fg("accent", text),
       });
     });

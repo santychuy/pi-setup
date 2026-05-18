@@ -9,6 +9,7 @@ import {
   type ExtensionContext,
   type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { isBashInput, resolveEditorBorder } from "../shared/editor-border-resolver";
 
 type FooterMode = "zen" | "dev";
 type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -66,8 +67,13 @@ const createBashAwareBorderEditor = (
   bashInput: (text: string) => string,
 ): CustomEditor => {
   const editor = new CustomEditor(tui, { ...theme, borderColor: baseBorder }, keybindings);
-  const isBashMode = (): boolean => editor.getText().startsWith("!");
-  const getBorderColor = (): ((text: string) => string) => (isBashMode() ? bashBorder : baseBorder);
+  const isBashMode = (): boolean => isBashInput(editor.getText());
+  const getBorderColor = (): ((text: string) => string) =>
+    resolveEditorBorder({
+      text: editor.getText(),
+      baseBorder,
+      bashBorder,
+    });
 
   const originalHandleInput = editor.handleInput.bind(editor);
   editor.handleInput = (data: string): void => {
