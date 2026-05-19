@@ -90,14 +90,60 @@ Ask Pi naturally, or call the `leader` tool directly:
 
 ## Agent Profiles
 
-| Agent      | Purpose                            | Model             | Tools                      |
-| ---------- | ---------------------------------- | ----------------- | -------------------------- |
-| `default`  | General-purpose (no system prompt) | Parent model      | read, bash, grep, find, ls |
-| `scout`    | Fast codebase recon                | claude-haiku-4-5  | read, grep, find, ls, bash |
-| `planner`  | Implementation plans (read-only)   | claude-sonnet-4-5 | read, grep, find, ls       |
-| `reviewer` | Code review                        | claude-sonnet-4-5 | read, grep, find, ls, bash |
-| `worker`   | Full implementation                | claude-sonnet-4-5 | all defaults               |
-| `oracle`   | Second opinion (no edits)          | claude-sonnet-4-5 | read, grep, find, ls       |
+| Agent      | Purpose                            | Model                         | Tools                      |
+| ---------- | ---------------------------------- | ----------------------------- | -------------------------- |
+| `default`  | General-purpose (no system prompt) | Parent model                  | read, bash, grep, find, ls |
+| `scout`    | Fast codebase recon                | opencode-go/deepseek-v4-flash | read, grep, find, ls, bash |
+| `planner`  | Implementation plans (read-only)   | openai-codex/gpt-5.5          | read, grep, find, ls       |
+| `reviewer` | Code review                        | opencode-go/glm-5.1           | read, grep, find, ls, bash |
+| `worker`   | Full implementation                | openai-codex/gpt-5.3-codex    | all defaults               |
+| `oracle`   | Second opinion (no edits)          | opencode-go/glm-5.1           | read, grep, find, ls       |
+
+## Budget Policy Configuration
+
+The leaders extension uses a **layered budget system** to control subagent resource limits:
+
+```
+Per-call budget (highest priority)
+    ↓ overrides if provided
+Session config file (.pi/leaders.json)
+    ↓ overrides if present
+DEFAULT_BUDGET_POLICY (lowest priority)
+```
+
+Hard caps (`MAX_PARALLEL_CAP=4`, `MAX_AGENTS_PER_RUN_CAP=6`) are always enforced regardless of config.
+
+### Default budget values
+
+| Limit                | Default         | Hard Cap | Overridable       |
+| -------------------- | --------------- | -------- | ----------------- |
+| `maxDurationMs`      | 300,000 (5 min) | —        | ✅ Unlimited      |
+| `maxTokensTotal`     | 140,000         | —        | ✅ Unlimited      |
+| `maxCostUsdTotal`    | 0.35            | —        | ✅ Unlimited      |
+| `maxDelegationDepth` | 1               | —        | ✅ Unlimited      |
+| `maxAgentsPerRun`    | 3               | 6        | ✅ Clamped to cap |
+| `maxParallel`        | 2               | 4        | ✅ Clamped to cap |
+
+### Session-level overrides (`.pi/leaders.json`)
+
+Create a `.pi/leaders.json` file in your project's `.pi/` directory to override the default budget for the session. Any field omitted falls back to `DEFAULT_BUDGET_POLICY`.
+
+```json
+{
+  "budget": {
+    "maxDurationMs": 600000,
+    "maxTokensTotal": 200000,
+    "maxCostUsdTotal": 0.5,
+    "maxDelegationDepth": 2,
+    "maxAgentsPerRun": 4,
+    "maxParallel": 3
+  }
+}
+```
+
+- Values for `maxAgentsPerRun` above 6 and `maxParallel` above 4 are silently clamped to their hard caps.
+- All other values accept whatever you set — you own them.
+- Per-call `budget` parameters still override the session config when provided.
 
 ### Custom agents
 
