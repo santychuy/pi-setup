@@ -1,6 +1,8 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 const MIN_BOX_WIDTH = 32;
 const MIN_SPLIT_WIDTH = 68;
@@ -52,9 +54,12 @@ const compactList = (items: readonly string[], emptyLabel: string, maxItems = 3)
 };
 
 const getContextFiles = (systemPrompt: string): string[] => {
-  const matches = systemPrompt.match(/(?:SYSTEM|AGENTS|CLAUDE)\.md/g) ?? [];
+  const matches = systemPrompt.match(/(?:SYSTEM|APPEND_SYSTEM|AGENTS|CLAUDE)\.md/g) ?? [];
   return [...new Set(matches)].sort();
 };
+
+const getProjectAppendStatus = (): "✓" | "✗" =>
+  existsSync(join(process.cwd(), ".pi", "APPEND_SYSTEM.md")) ? "✓" : "✗";
 
 const sourcePathFrom = (item: CommandInfo | ToolInfo): string | undefined => item.sourceInfo?.path;
 
@@ -91,7 +96,7 @@ const getHeaderInfo = (pi: ExtensionAPI, ctx: ExtensionContext): HeaderInfo => {
     extensions: `extensions ${extensionSources.size}`,
     prompts: `prompts ${prompts.length}`,
     mcps: `mcp ${mcpExtensionSources.size}`,
-    context: `context ${compactList(contextFiles, "none")}`,
+    context: `context ${compactList(contextFiles, "none")} append:${getProjectAppendStatus()}`,
   };
 };
 
