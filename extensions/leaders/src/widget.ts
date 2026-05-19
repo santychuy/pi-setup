@@ -9,24 +9,9 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { LeaderEntry, LeaderStatus } from "./tracker.js";
+import { getStatusMeta } from "./status-display.js";
 
 // ── Status Icons ─────────────────────────────────────────────────────────────
-
-const FOREGROUND_STATUS_ICONS: Record<LeaderStatus, string> = {
-  spawning: "◌",
-  running: "●",
-  completed: "✓",
-  failed: "✗",
-  cancelled: "⊘",
-};
-
-const ASYNC_STATUS_ICONS: Record<LeaderStatus, string> = {
-  spawning: "◌",
-  running: "⏳",
-  completed: "✓",
-  failed: "✗",
-  cancelled: "⊘",
-};
 
 // ── Theme Color Mapping ──────────────────────────────────────────────────────
 
@@ -36,6 +21,9 @@ const STATUS_COLORS: Record<LeaderStatus, (text: string, theme: Theme) => string
   completed: (text, theme) => theme.fg("success", text),
   failed: (text, theme) => theme.fg("error", text),
   cancelled: (text, theme) => theme.fg("warning", text),
+  timed_out: (text, theme) => theme.fg("warning", text),
+  budget_blocked: (text, theme) => theme.fg("warning", text),
+  budget_exceeded: (text, theme) => theme.fg("error", text),
 };
 
 // ── Renderer ─────────────────────────────────────────────────────────────────
@@ -51,8 +39,11 @@ export const renderLeadersWidget = (
   if (entries.length === 0) return undefined;
 
   return entries.map((entry) => {
-    const icons = entry.source === "async" ? ASYNC_STATUS_ICONS : FOREGROUND_STATUS_ICONS;
-    const icon = STATUS_COLORS[entry.status](icons[entry.status], theme);
+    const baseIcon = getStatusMeta(entry.status).icon;
+    const iconGlyph = entry.source === "async" && entry.status === "running" ? "⏳" : baseIcon;
+    const colorize =
+      STATUS_COLORS[entry.status] ?? ((text: string, t: Theme) => t.fg("warning", text));
+    const icon = colorize(iconGlyph, theme);
     const agentName = theme.fg("muted", entry.agent);
     const task = entry.task;
     const modeTag = theme.fg("dim", entry.mode);

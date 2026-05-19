@@ -12,7 +12,15 @@ import type { LeaderSessionMode } from "./types.js";
 
 // ── Leader Entry ────────────────────────────────────────────────────────────
 
-export type LeaderStatus = "spawning" | "running" | "completed" | "failed" | "cancelled";
+export type LeaderStatus =
+  | "spawning"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "timed_out"
+  | "budget_blocked"
+  | "budget_exceeded";
 
 export type LeaderSource = "foreground" | "async";
 
@@ -46,6 +54,9 @@ const ASYNC_TERMINAL_PRUNE_MS = 10_000;
 
 let nextId = 1;
 
+const truncateTask = (task: string): string =>
+  task.length > MAX_TASK_DISPLAY_LENGTH ? `${task.slice(0, MAX_TASK_DISPLAY_LENGTH - 3)}...` : task;
+
 export class LeaderTracker {
   private readonly entries: LeaderEntry[] = [];
   private onChange?: () => void;
@@ -66,10 +77,7 @@ export class LeaderTracker {
     const entry: LeaderEntry = {
       id: nextId++,
       agent,
-      task:
-        task.length > MAX_TASK_DISPLAY_LENGTH
-          ? `${task.slice(0, MAX_TASK_DISPLAY_LENGTH - 3)}...`
-          : task,
+      task: truncateTask(task),
       mode,
       status: "spawning",
       startedAt: new Date().toISOString(),
@@ -88,10 +96,7 @@ export class LeaderTracker {
     const entry: LeaderEntry = {
       id: nextId++,
       agent: run.agent,
-      task:
-        run.task.length > MAX_TASK_DISPLAY_LENGTH
-          ? `${run.task.slice(0, MAX_TASK_DISPLAY_LENGTH - 3)}...`
-          : run.task,
+      task: truncateTask(run.task),
       mode: run.mode,
       status: run.status === "running" ? "running" : (run.status as LeaderStatus),
       startedAt: run.startedAt,
@@ -235,10 +240,7 @@ export class LeaderTracker {
         this.entries.push({
           id: nextId++,
           agent: run.agent,
-          task:
-            run.task.length > MAX_TASK_DISPLAY_LENGTH
-              ? `${run.task.slice(0, MAX_TASK_DISPLAY_LENGTH - 3)}...`
-              : run.task,
+          task: truncateTask(run.task),
           mode: run.mode,
           status: run.status === "running" ? "running" : (run.status as LeaderStatus),
           startedAt: run.startedAt,

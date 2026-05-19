@@ -61,6 +61,45 @@ export interface LeaderSingleResult {
   stderr: string;
 }
 
+export interface LeaderParallelTaskInput {
+  id?: string;
+  task: string;
+  agent?: string;
+  mode?: LeaderSessionMode;
+}
+
+export type LeaderParallelTaskStatus =
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "timed_out"
+  | "budget_blocked"
+  | "budget_exceeded";
+
+export type LeaderParallelAbortReason = "cancelled" | "timed_out" | "budget_exceeded";
+
+export interface LeaderParallelTaskResult {
+  id: string;
+  task: string;
+  agent: string;
+  mode: LeaderSessionMode;
+  status: LeaderParallelTaskStatus;
+  result?: LeaderSingleResult;
+  error?: string;
+  startedAt?: number;
+  endedAt?: number;
+  abortReason?: LeaderParallelAbortReason;
+  blockedReason?: "maxTokensTotal" | "maxCostUsdTotal";
+}
+
+export interface LeaderParallelResult {
+  status: "completed" | "partial" | "failed" | "cancelled" | "timed_out" | "budget_exceeded";
+  tasks: LeaderParallelTaskResult[];
+  usage: LeaderUsageStats;
+  abortReason?: LeaderParallelAbortReason;
+  blockedReason?: "maxTokensTotal" | "maxCostUsdTotal";
+}
+
 // ── Agent Configuration ────────────────────────────────────────────────────
 
 export interface LeaderAgentConfig {
@@ -126,6 +165,9 @@ export const DEFAULT_BUDGET_POLICY: LeaderBudgetPolicy = {
 // ── Tool Parameter Types ────────────────────────────────────────────────────
 
 export type LeaderAction = "run" | "list" | "status" | "cleanup";
+
+export const MAX_PARALLEL_CAP = 4;
+export const MAX_AGENTS_PER_RUN_CAP = 6;
 
 // ── Default Agent ──────────────────────────────────────────────────────────
 

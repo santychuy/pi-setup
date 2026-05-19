@@ -5,7 +5,14 @@
  * text for the parent agent, and formats usage statistics.
  */
 
-import type { LeaderDisplayItem, LeaderSingleResult, LeaderUsageStats } from "./types.js";
+import type {
+  LeaderDisplayItem,
+  LeaderParallelResult,
+  LeaderParallelTaskStatus,
+  LeaderSingleResult,
+  LeaderUsageStats,
+} from "./types.js";
+import { getStatusMeta, PARALLEL_STATUS_ORDER } from "./status-display.js";
 
 // ── Usage Formatting ────────────────────────────────────────────────────────
 
@@ -122,4 +129,37 @@ export const formatLeaderResult = (result: LeaderSingleResult): string => {
   parts.push(`\n${output}`);
 
   return parts.join("\n");
+};
+
+export const formatParallelLeaderResult = (result: LeaderParallelResult): string => {
+  const counts = result.tasks.reduce(
+    (acc, task) => {
+      acc[task.status] = (acc[task.status] ?? 0) + 1;
+      return acc;
+    },
+    {} as Partial<Record<LeaderParallelTaskStatus, number>>,
+  );
+
+  const countParts = PARALLEL_STATUS_ORDER.filter((status) => (counts[status] ?? 0) > 0).map(
+    (status) => {
+      const meta = getStatusMeta(status);
+      return `${meta.icon} ${counts[status]} ${meta.label}`;
+    },
+  );
+
+  const lines = [
+    `Parallel leader ${result.status}.`,
+    `Tasks: ${result.tasks.length} total${countParts.length > 0 ? ` · ${countParts.join(" · ")}` : ""}`,
+  ];
+
+  const usage = formatUsageStats(result.usage);
+  if (usage) lines.push(`Usage: ${usage}`);
+
+  for (const item of result.tasks.filter((task) => task.status !== "completed")) {
+    const meta = getStatusMeta(item.status);
+    const reason = item.blockedReason ? ` · ${item.blockedReason}` : "";
+    lines.push(`- ${meta.icon} ${meta.label} ${item.id} · ${item.agent}${reason}`);
+  }
+
+  return lines.join("\n");
 };

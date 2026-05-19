@@ -12,25 +12,34 @@
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
-import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import { DEFAULT_AGENT, DEFAULT_BUDGET_POLICY } from "./src/types.js";
+import { DEFAULT_BUDGET_POLICY, MAX_AGENTS_PER_RUN_CAP, MAX_PARALLEL_CAP } from "./src/types.js";
 import type {
   LeaderAgentConfig,
   LeaderBudgetPolicy,
   LeaderDelegationContract,
+  LeaderParallelAbortReason,
+  LeaderParallelResult,
+  LeaderParallelTaskInput,
+  LeaderParallelTaskResult,
   LeaderSingleResult,
+  LeaderAgentDiscoveryResult,
   LeaderSessionMode,
 } from "./src/types.js";
 import { LeaderTracker } from "./src/tracker.js";
 import { renderLeadersWidget } from "./src/widget.js";
 
 import { createStreamParseState, getFinalOutput, processStreamChunk } from "./src/stream-parser.js";
-import { formatLeaderResult, formatUsageStats } from "./src/format.js";
+import { formatLeaderResult, formatParallelLeaderResult, formatUsageStats } from "./src/format.js";
+import { getRunStatusMeta, getStatusMeta, PARALLEL_STATUS_ORDER } from "./src/status-display.js";
 import { CHILD_ENV, writePromptToTempFile, cleanupTempFile } from "./src/utils.js";
+import { addUsage, zeroUsage } from "./src/usage.js";
+import { parseLeaderCommand } from "./src/command-parser.js";
+import { validateContractResult, type ContractValidationResult } from "./src/contract.js";
+import { discoverLeaderAgents, resolveAgent } from "./src/agents.js";
 import { buildLeaderArgs } from "./src/spawn-builder.js";
 import { resolveLeaderSessionFile } from "./src/session.js";
 import {
@@ -235,157 +244,6 @@ const runLeader = async (
   });
 };
 
-// ── Agent Discovery ──────────────────────────────────────────────────────────
-
-import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import type { LeaderAgentDiscoveryResult } from "./src/types.js";
-
-const USER_AGENTS_DIR = () => path.join(getAgentDir(), "leaders");
-
-const loadAgentsFromDir = (
-  dir: string,
-  source: LeaderAgentConfig["source"],
-): { agents: LeaderAgentConfig[]; errors: Array<{ path: string; error: string }> } => {
-  const agents: LeaderAgentConfig[] = [];
-  const errors: Array<{ path: string; error: string }> = [];
-
-  if (!fs.existsSync(dir)) return { agents, errors };
-
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return { agents, errors };
-  }
-
-  for (const entry of entries) {
-    if (!entry.name.endsWith(".md")) continue;
-    if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-
-    const filePath = path.join(dir, entry.name);
-    let content: string;
-    try {
-      content = fs.readFileSync(filePath, "utf-8");
-    } catch (err) {
-      errors.push({ path: filePath, error: String(err) });
-      continue;
-    }
-
-    const { frontmatter, body } = parseFrontmatter<Record<string, string>>(content);
-
-    if (!frontmatter.name || !frontmatter.description) continue;
-
-    const tools = frontmatter.tools
-      ?.split(",")
-      .map((t: string) => t.trim())
-      .filter(Boolean);
-
-    agents.push({
-      name: frontmatter.name,
-      description: frontmatter.description,
-      tools: tools && tools.length > 0 ? tools : undefined,
-      model: frontmatter.model,
-      systemPrompt: body,
-      systemPromptMode: (frontmatter.systemPromptMode as "replace" | "append") ?? "replace",
-      inheritProjectContext: frontmatter.inheritProjectContext === "true",
-      inheritSkills: frontmatter.inheritSkills === "true",
-      sessionMode: (frontmatter.sessionMode as LeaderSessionMode) ?? "ephemeral",
-      source,
-      filePath,
-    });
-  }
-
-  return { agents, errors };
-};
-
-const discoverLeaderAgents = (_cwd: string): LeaderAgentDiscoveryResult => {
-  // Built-in agents from the extension's agents/ directory
-  const builtinDir = path.join(__dirname, "agents");
-  const builtinResult = loadAgentsFromDir(builtinDir, "builtin");
-
-  // User agents from ~/.pi/agent/leaders/
-  const userDir = USER_AGENTS_DIR();
-  const userResult = loadAgentsFromDir(userDir, "user");
-
-  // Priority: user > builtin > default
-  const agentMap = new Map<string, LeaderAgentConfig>();
-
-  // Default agent always available
-  agentMap.set(DEFAULT_AGENT.name, DEFAULT_AGENT);
-
-  // Built-in agents override default on name collision
-  for (const agent of builtinResult.agents) {
-    agentMap.set(agent.name, agent);
-  }
-
-  // User agents override everything
-  for (const agent of userResult.agents) {
-    agentMap.set(agent.name, agent);
-  }
-
-  return {
-    agents: Array.from(agentMap.values()),
-    errors: [...builtinResult.errors, ...userResult.errors],
-  };
-};
-
-// ── Slash Command Parser ────────────────────────────────────────────────────
-
-const SESSION_FLAGS = ["--ephemeral", "--persistent", "--fork", "--ephemeral-fork"] as const;
-
-interface LeaderCommandInput {
-  task: string;
-  mode: LeaderSessionMode;
-  agent?: string;
-}
-
-const parseLeaderCommand = (args: string | undefined): LeaderCommandInput | string => {
-  const tokens = args?.trim().split(/\s+/).filter(Boolean) ?? [];
-
-  const flags = tokens.filter((t) => t.startsWith("--"));
-  const nonFlags = tokens.filter((t) => !t.startsWith("--") && !t.startsWith("@"));
-
-  // Parse agent @mentions: @scout, @planner, etc.
-  const agentMentions = tokens.filter((t) => t.startsWith("@"));
-  const agentName = agentMentions.length > 0 ? agentMentions[0].slice(1) : undefined;
-
-  // Parse mode flags
-  const modes = flags.filter((f) => SESSION_FLAGS.includes(f as (typeof SESSION_FLAGS)[number]));
-  if (modes.length > 1)
-    return "Use only one mode flag: --ephemeral, --persistent, --fork, or --ephemeral-fork";
-
-  let mode: LeaderSessionMode = "ephemeral";
-  if (modes.length === 1) {
-    if (modes[0] === "--persistent") mode = "persistent";
-    else if (modes[0] === "--fork") mode = "fork";
-    else if (modes[0] === "--ephemeral-fork") mode = "ephemeral-fork";
-    else mode = "ephemeral";
-  }
-
-  const task = nonFlags.join(" ").trim();
-  if (!task)
-    return "Usage: /leader [--ephemeral|--persistent|--fork|--ephemeral-fork] [@agent] <task>";
-
-  return { task, mode, agent: agentName };
-};
-
-// ── Resolve Agent ────────────────────────────────────────────────────────────
-
-const resolveAgent = (
-  agentName: string | undefined,
-  discovery: LeaderAgentDiscoveryResult,
-): LeaderAgentConfig | string => {
-  if (!agentName) return DEFAULT_AGENT;
-
-  const found = discovery.agents.find((a) => a.name === agentName);
-  if (!found) {
-    const available = discovery.agents.map((a) => a.name).join(", ");
-    return `Unknown agent "${agentName}". Available: ${available}`;
-  }
-
-  return found;
-};
-
 // ── Extension ────────────────────────────────────────────────────────────────
 
 const WIDGET_KEY = "leaders";
@@ -399,52 +257,6 @@ const updateWidget = (ctx: ExtensionContext): void => {
 
 const LEADERS_DEPTH_ENV = "PI_LEADERS_DEPTH";
 
-interface ContractValidationResult {
-  ok: boolean;
-  parsed?: Record<string, unknown>;
-  error?: string;
-}
-
-const parseJsonObjectFromText = (text: string): Record<string, unknown> | undefined => {
-  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
-  const candidate = fenced?.[1] ?? text;
-  const start = candidate.indexOf("{");
-  const end = candidate.lastIndexOf("}");
-  if (start < 0 || end <= start) return undefined;
-
-  try {
-    const parsed = JSON.parse(candidate.slice(start, end + 1)) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
-const validateContractResult = (
-  contract: LeaderDelegationContract,
-  output: string,
-): ContractValidationResult => {
-  const parsed = parseJsonObjectFromText(output);
-  if (!parsed) {
-    return { ok: false, error: "Missing JSON object result" };
-  }
-
-  const hasTaskId = parsed.taskId === contract.taskId;
-  const hasStatus = typeof parsed.status === "string";
-  const hasSummary = typeof parsed.summary === "string";
-
-  if (!hasTaskId || !hasStatus || !hasSummary) {
-    return {
-      ok: false,
-      error: "Invalid contract result schema: required { taskId, status, summary }",
-    };
-  }
-
-  return { ok: true, parsed };
-};
-
 const getCurrentDepth = (): number => {
   const parsed = Number.parseInt(process.env[LEADERS_DEPTH_ENV] ?? "0", 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
@@ -454,6 +266,172 @@ const isDepthAllowed = (policy: LeaderBudgetPolicy): boolean =>
   getCurrentDepth() < policy.limits.maxDelegationDepth;
 
 const ASYNC_POLL_INTERVAL_MS = 2000;
+
+const runParallelLeaders = async (
+  tasks: LeaderParallelTaskInput[],
+  ctx: ExtensionContext,
+  discovery: LeaderAgentDiscoveryResult,
+  budget: LeaderBudgetPolicy,
+  signal?: AbortSignal,
+): Promise<LeaderParallelResult> => {
+  const maxParallel = Math.min(Math.max(1, budget.limits.maxParallel), MAX_PARALLEL_CAP);
+  const queue = tasks.map((task, index) => ({
+    ...task,
+    queueIndex: index,
+    id: task.id ?? `task-${index + 1}`,
+  }));
+  const results: Array<LeaderParallelTaskResult | undefined> = new Array(queue.length);
+  let totalUsage = zeroUsage();
+  let abortReason: LeaderParallelAbortReason | undefined;
+  let blockedReason: "maxTokensTotal" | "maxCostUsdTotal" | undefined;
+
+  const controller = new AbortController();
+  const abortWith = (
+    reason: LeaderParallelAbortReason,
+    blocked?: "maxTokensTotal" | "maxCostUsdTotal",
+  ) => {
+    if (!abortReason) {
+      abortReason = reason;
+      if (blocked) blockedReason = blocked;
+    }
+    if (!controller.signal.aborted) controller.abort();
+  };
+
+  const abortAll = () => abortWith("cancelled");
+  signal?.addEventListener("abort", abortAll, { once: true });
+
+  const timeout = setTimeout(() => {
+    abortWith("timed_out");
+  }, budget.limits.maxDurationMs);
+
+  const worker = async () => {
+    while (queue.length > 0 && !controller.signal.aborted) {
+      if (
+        budget.limits.maxTokensTotal &&
+        totalUsage.input + totalUsage.output >= budget.limits.maxTokensTotal
+      ) {
+        abortWith("budget_exceeded", "maxTokensTotal");
+        break;
+      }
+      if (budget.limits.maxCostUsdTotal && totalUsage.cost >= budget.limits.maxCostUsdTotal) {
+        abortWith("budget_exceeded", "maxCostUsdTotal");
+        break;
+      }
+
+      const next = queue.shift();
+      if (!next) break;
+      const index = next.queueIndex;
+      const resolved = resolveAgent(next.agent, discovery);
+      if (typeof resolved === "string") {
+        results[index] = {
+          id: next.id,
+          task: next.task,
+          agent: next.agent ?? "default",
+          mode: "ephemeral",
+          status: "failed",
+          error: resolved,
+        };
+        continue;
+      }
+
+      const mode: LeaderSessionMode = next.mode ?? resolved.sessionMode ?? "ephemeral";
+      const startedAt = Date.now();
+      try {
+        const single = await runLeader(next.task, ctx, resolved, mode, controller.signal);
+        totalUsage = addUsage(totalUsage, single.usage);
+        const status =
+          abortReason === "timed_out"
+            ? "timed_out"
+            : abortReason === "budget_exceeded"
+              ? "budget_exceeded"
+              : single.exitCode === 0
+                ? "completed"
+                : "failed";
+
+        results[index] = {
+          id: next.id,
+          task: next.task,
+          agent: resolved.name,
+          mode,
+          status,
+          result: single,
+          startedAt,
+          endedAt: Date.now(),
+          abortReason,
+          blockedReason,
+        };
+      } catch (error) {
+        const status =
+          abortReason === "timed_out"
+            ? "timed_out"
+            : abortReason === "budget_exceeded"
+              ? "budget_exceeded"
+              : abortReason === "cancelled" || controller.signal.aborted
+                ? "cancelled"
+                : "failed";
+        results[index] = {
+          id: next.id,
+          task: next.task,
+          agent: resolved.name,
+          mode,
+          status,
+          error: error instanceof Error ? error.message : String(error),
+          startedAt,
+          endedAt: Date.now(),
+          abortReason,
+          blockedReason,
+        };
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(maxParallel, queue.length || 1) }, () => worker()),
+  );
+  clearTimeout(timeout);
+  signal?.removeEventListener("abort", abortAll);
+
+  for (const task of queue) {
+    const index = task.queueIndex;
+    results[index] = {
+      id: task.id ?? "queued",
+      task: task.task,
+      agent: task.agent ?? "default",
+      mode: task.mode ?? "ephemeral",
+      status:
+        abortReason === "budget_exceeded"
+          ? "budget_blocked"
+          : abortReason === "timed_out"
+            ? "timed_out"
+            : "cancelled",
+      abortReason,
+      blockedReason,
+    };
+  }
+
+  const finalized = results.filter(Boolean) as LeaderParallelTaskResult[];
+  const completed = finalized.filter((r) => r.status === "completed").length;
+  const allCompleted = completed === finalized.length;
+  const allFailed = finalized.every((r) => r.status === "failed");
+  const status: LeaderParallelResult["status"] =
+    abortReason === "timed_out"
+      ? "timed_out"
+      : abortReason === "budget_exceeded"
+        ? "budget_exceeded"
+        : abortReason === "cancelled"
+          ? completed > 0
+            ? "partial"
+            : "cancelled"
+          : allCompleted
+            ? "completed"
+            : allFailed
+              ? "failed"
+              : completed > 0
+                ? "partial"
+                : "failed";
+
+  return { status, tasks: finalized, usage: totalUsage, abortReason, blockedReason };
+};
 
 const leadersExtension = (pi: ExtensionAPI): void => {
   // ── Widget: re-render on tracker state changes ───────────────────────────
@@ -519,12 +497,32 @@ const leadersExtension = (pi: ExtensionAPI): void => {
       "Use leader with agent 'scout' for fast codebase exploration, 'planner' for read-only plans, 'reviewer' for code review, 'oracle' for research and Q&A, 'worker' for implementation.",
       "Use leader when a task would benefit from a clean context window rather than the full conversation history.",
       "Use leader with mode 'ephemeral' for one-shot tasks and 'fork' when the subagent needs parent conversation context.",
-      "When a user message contains multiple independent tasks, delegate each to a separate leader call rather than handling them sequentially yourself.",
+      "Use leader({ task }) for dependent/sequential work and leader({ tasks: [...] }) for independent work that can run concurrently.",
+      "For parallel runs, keep fan-out small (2-3 tasks) and avoid parallel file-writing tasks unless explicitly requested.",
       "Always call leader with action 'list' first to check available agents and pick the best one for the task.",
     ],
     parameters: Type.Object({
       task: Type.Optional(
-        Type.String({ description: "The complete task for the leader to perform." }),
+        Type.String({
+          description: "Single task for one leader run. Use for dependent/sequential work.",
+        }),
+      ),
+      tasks: Type.Optional(
+        Type.Array(
+          Type.Object({
+            id: Type.Optional(Type.String()),
+            task: Type.String(),
+            agent: Type.Optional(Type.String()),
+            mode: Type.Optional(
+              Type.Union([
+                Type.Literal("ephemeral"),
+                Type.Literal("persistent"),
+                Type.Literal("fork"),
+                Type.Literal("ephemeral-fork"),
+              ]),
+            ),
+          }),
+        ),
       ),
       contract: Type.Optional(
         Type.Object({
@@ -592,7 +590,7 @@ const leadersExtension = (pi: ExtensionAPI): void => {
       ),
     }),
     execute: async (_toolCallId, params, signal, onUpdate, ctx) => {
-      const discovery = discoverLeaderAgents(ctx.cwd);
+      const discovery = discoverLeaderAgents();
 
       // ── List action ────────────────────────────────────────────────────
       if (params.action === "list") {
@@ -663,6 +661,7 @@ const leadersExtension = (pi: ExtensionAPI): void => {
 
       // ── Run action ────────────────────────────────────────
       const task = params.task;
+      const tasks = params.tasks as LeaderParallelTaskInput[] | undefined;
       const budget: LeaderBudgetPolicy = params.budget ?? DEFAULT_BUDGET_POLICY;
       const contract: LeaderDelegationContract | undefined = params.contract;
 
@@ -677,15 +676,53 @@ const leadersExtension = (pi: ExtensionAPI): void => {
           details: { budget, blocked: "maxDelegationDepth" },
         };
       }
-      if (!task) {
+      if (task && tasks?.length) {
+        return {
+          content: [{ type: "text", text: "Provide either task or tasks, not both." }],
+          details: {},
+        };
+      }
+      if (!task && (!tasks || tasks.length === 0)) {
         return {
           content: [
             {
               type: "text",
-              text: "Provide a task to delegate. Usage: leader({ task: '...', mode: 'ephemeral', agent: 'scout' })",
+              text: "Provide task or tasks. Usage: leader({ task: '...' }) or leader({ tasks: [{ task: '...' }] })",
             },
           ],
           details: {},
+        };
+      }
+
+      if (tasks && tasks.length > Math.min(budget.limits.maxAgentsPerRun, MAX_AGENTS_PER_RUN_CAP)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Parallel delegation blocked: maxAgentsPerRun=${Math.min(budget.limits.maxAgentsPerRun, MAX_AGENTS_PER_RUN_CAP)}.`,
+            },
+          ],
+          details: { budget, blocked: "maxAgentsPerRun" },
+        };
+      }
+
+      if (tasks) {
+        if (params.async) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Parallel async runs are not supported yet. Use foreground tasks[].",
+              },
+            ],
+            details: {},
+          };
+        }
+
+        const parallelResult = await runParallelLeaders(tasks, ctx, discovery, budget, signal);
+        return {
+          content: [{ type: "text", text: formatParallelLeaderResult(parallelResult) }],
+          details: { ...parallelResult, budget },
         };
       }
 
@@ -700,7 +737,7 @@ const leadersExtension = (pi: ExtensionAPI): void => {
       // ── Async or foreground execution ──────────────────────────────
       const delegatedTask = contract
         ? `${task}\n\nReturn your final answer as a single JSON object matching this minimum schema:\n{\n  "taskId": "${contract.taskId}",\n  "status": "success|partial|failed|blocked",\n  "summary": "string"\n}`
-        : task;
+        : (task as string);
 
       if (params.async) {
         const asyncRun = await spawnAsyncLeader(delegatedTask, ctx, agent, mode, budget);
@@ -778,6 +815,44 @@ const leadersExtension = (pi: ExtensionAPI): void => {
         return new Text(theme.fg("warning", "⏳"), 0, 0);
       }
 
+      if (
+        details &&
+        typeof details === "object" &&
+        "tasks" in details &&
+        Array.isArray(details.tasks) &&
+        "usage" in details
+      ) {
+        const parallel = details as LeaderParallelResult;
+        const counts = parallel.tasks.reduce(
+          (acc, task) => {
+            acc[task.status] = (acc[task.status] ?? 0) + 1;
+            return acc;
+          },
+          {} as Partial<Record<string, number>>,
+        );
+
+        const runMeta = getRunStatusMeta(parallel.status);
+        const icon =
+          parallel.status === "completed"
+            ? theme.fg("success", runMeta.icon)
+            : parallel.status === "failed"
+              ? theme.fg("error", runMeta.icon)
+              : theme.fg("warning", runMeta.icon);
+
+        const parts = [`${icon} parallel`, `${parallel.tasks.length} total`];
+
+        for (const status of PARALLEL_STATUS_ORDER) {
+          const count = counts[status] ?? 0;
+          if (count <= 0) continue;
+          const meta = getStatusMeta(status);
+          parts.push(`${meta.icon}${count}`);
+        }
+
+        const usage = formatUsageStats(parallel.usage);
+        if (usage) parts.push(theme.fg("dim", usage));
+        return new Text(parts.join(" · "), 0, 0);
+      }
+
       // Not a leader run result (list/status actions) — plain text fallback
       if (!details || typeof details !== "object" || !("exitCode" in details)) {
         const text = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -817,7 +892,7 @@ const leadersExtension = (pi: ExtensionAPI): void => {
         return;
       }
 
-      const discovery = discoverLeaderAgents(ctx.cwd);
+      const discovery = discoverLeaderAgents();
       const resolved = resolveAgent(input.agent, discovery);
       if (typeof resolved === "string") {
         ctx.ui.notify(resolved, "error");
@@ -846,11 +921,11 @@ const leadersExtension = (pi: ExtensionAPI): void => {
   // ── Inject agent roster into system prompt on first turn ─────────────────
   let rosterInjected = false;
 
-  pi.on("before_agent_start", async (event, ctx) => {
+  pi.on("before_agent_start", async (event) => {
     if (process.env[CHILD_ENV] === "1") return;
     if (rosterInjected) return;
 
-    const discovery = discoverLeaderAgents(ctx.cwd);
+    const discovery = discoverLeaderAgents();
     if (discovery.agents.length === 0) return;
 
     rosterInjected = true;
