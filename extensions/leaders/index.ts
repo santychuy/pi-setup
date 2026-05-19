@@ -16,7 +16,12 @@ import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-cod
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import { DEFAULT_BUDGET_POLICY, MAX_AGENTS_PER_RUN_CAP, MAX_PARALLEL_CAP } from "./src/types.js";
+import {
+  DEFAULT_BUDGET_POLICY,
+  EXTENSION_TOOL_REGISTRY,
+  MAX_AGENTS_PER_RUN_CAP,
+  MAX_PARALLEL_CAP,
+} from "./src/types.js";
 import type {
   LeaderAgentConfig,
   LeaderBudgetPolicy,
@@ -55,6 +60,7 @@ import {
   isHandoffDelivered,
   markHandoffDelivered,
   markHandoffFailedAttempt,
+  type LeaderAsyncRun,
   type LeaderHandoffConfig,
 } from "./src/async.js";
 
@@ -273,6 +279,21 @@ const isDepthAllowed = (policy: LeaderBudgetPolicy): boolean =>
 
 const ASYNC_POLL_INTERVAL_MS = 2000;
 
+interface LeaderAsyncParallelTaskStart {
+  id: string;
+  task: string;
+  agent: string;
+  mode: LeaderSessionMode;
+  status: "started" | "failed";
+  run?: LeaderAsyncRun;
+  error?: string;
+}
+
+interface LeaderAsyncParallelStartResult {
+  status: "started" | "partial" | "failed";
+  tasks: LeaderAsyncParallelTaskStart[];
+}
+
 const runParallelLeaders = async (
   tasks: LeaderParallelTaskInput[],
   ctx: ExtensionContext,
@@ -437,6 +458,95 @@ const runParallelLeaders = async (
                 : "failed";
 
   return { status, tasks: finalized, usage: totalUsage, abortReason, blockedReason };
+};
+
+const spawnParallelAsyncLeaders = async (
+  tasks: LeaderParallelTaskInput[],
+  ctx: ExtensionContext,
+  discovery: LeaderAgentDiscoveryResult,
+  budget: LeaderBudgetPolicy,
+  handoff?: LeaderHandoffConfig,
+): Promise<LeaderAsyncParallelStartResult> => {
+  const maxParallel = Math.min(Math.max(1, budget.limits.maxParallel), MAX_PARALLEL_CAP);
+  const queue = tasks.map((task, index) => ({
+    ...task,
+    queueIndex: index,
+    id: task.id ?? `task-${index + 1}`,
+  }));
+  const started: Array<LeaderAsyncParallelTaskStart | undefined> = new Array(queue.length);
+
+  const worker = async () => {
+    while (queue.length > 0) {
+      const next = queue.shift();
+      if (!next) break;
+      const index = next.queueIndex;
+      const resolved = resolveAgent(next.agent, discovery);
+      if (typeof resolved === "string") {
+        started[index] = {
+          id: next.id,
+          task: next.task,
+          agent: next.agent ?? "default",
+          mode: next.mode ?? "ephemeral",
+          status: "failed",
+          error: resolved,
+        };
+        continue;
+      }
+
+      const mode: LeaderSessionMode = next.mode ?? resolved.sessionMode ?? "ephemeral";
+      try {
+        const run = await spawnAsyncLeader(next.task, ctx, resolved, mode, budget, handoff);
+        tracker.addAsync(run);
+        started[index] = {
+          id: next.id,
+          task: next.task,
+          agent: resolved.name,
+          mode,
+          status: run.status === "failed" ? "failed" : "started",
+          run,
+          error: run.status === "failed" ? run.result?.finalOutput : undefined,
+        };
+      } catch (error) {
+        started[index] = {
+          id: next.id,
+          task: next.task,
+          agent: resolved.name,
+          mode,
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(maxParallel, queue.length || 1) }, () => worker()),
+  );
+
+  const tasksStarted = started.filter(Boolean) as LeaderAsyncParallelTaskStart[];
+  const failures = tasksStarted.filter((task) => task.status === "failed").length;
+  const status: LeaderAsyncParallelStartResult["status"] =
+    failures === 0 ? "started" : failures === tasksStarted.length ? "failed" : "partial";
+
+  return { status, tasks: tasksStarted };
+};
+
+const formatAsyncParallelStartResult = (result: LeaderAsyncParallelStartResult): string => {
+  const startedCount = result.tasks.filter((task) => task.status === "started").length;
+  const failedCount = result.tasks.length - startedCount;
+  const header =
+    failedCount === 0
+      ? `Started ${startedCount} async leader run${startedCount === 1 ? "" : "s"}.`
+      : `Started ${startedCount} async leader run${startedCount === 1 ? "" : "s"}; ${failedCount} failed to start.`;
+
+  const lines = result.tasks.map((task) => {
+    if (task.status === "failed") {
+      return `- ✗ ${task.id} ${task.agent} ${task.mode} — ${task.error ?? "failed to start"}`;
+    }
+    return `- ⏳ ${task.id} ${task.agent} ${task.mode} — ${task.run?.id.slice(0, 8)}`;
+  });
+
+  return `${header}\n\n${lines.join("\n")}\n\nCheck all with: leader({ action: "status" })`;
 };
 
 const leadersExtension = (pi: ExtensionAPI): void => {
@@ -658,8 +768,15 @@ const leadersExtension = (pi: ExtensionAPI): void => {
       if (params.action === "list") {
         const lines = discovery.agents.map((a) => {
           const sourceTag = a.source === "builtin" ? "" : ` (${a.source})`;
-          const toolList = a.tools?.join(", ") ?? "default";
-          return `- **${a.name}**${sourceTag}: ${a.description} [tools: ${toolList}]`;
+          const extensionTools = (a.extensions ?? []).flatMap((extension) => [
+            ...(EXTENSION_TOOL_REGISTRY[extension] ?? []),
+          ]);
+          const toolList =
+            Array.from(new Set([...(a.tools ?? []), ...extensionTools])).join(", ") || "default";
+          const extensionTag = a.extensions?.length
+            ? ` [extensions: ${a.extensions.join(", ")}]`
+            : "";
+          return `- **${a.name}**${sourceTag}: ${a.description} [tools: ${toolList}]${extensionTag}`;
         });
         return {
           content: [{ type: "text", text: `Available leader agents:\n\n${lines.join("\n")}` }],
@@ -774,14 +891,17 @@ const leadersExtension = (pi: ExtensionAPI): void => {
 
       if (tasks) {
         if (params.async) {
+          const asyncParallelResult = await spawnParallelAsyncLeaders(
+            tasks,
+            ctx,
+            discovery,
+            budget,
+            params.handoff as LeaderHandoffConfig | undefined,
+          );
+          updateWidget(ctx);
           return {
-            content: [
-              {
-                type: "text",
-                text: "Parallel async runs are not supported yet. Use foreground tasks[].",
-              },
-            ],
-            details: {},
+            content: [{ type: "text", text: formatAsyncParallelStartResult(asyncParallelResult) }],
+            details: { ...asyncParallelResult, budget },
           };
         }
 
