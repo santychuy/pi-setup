@@ -3,7 +3,7 @@ name: reviewer
 description: Code review — check correctness, tests, edge cases, simplicity
 tools: read, grep, find, ls, bash
 extensions: web-access
-model: openai-codex/gpt-5.5
+model: opencode-go/glm-5.1
 systemPromptMode: replace
 inheritProjectContext: false
 inheritSkills: false

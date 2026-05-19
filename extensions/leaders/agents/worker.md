@@ -2,7 +2,7 @@
 name: worker
 description: General-purpose implementation agent with full capabilities
 extensions: web-access
-model: openai-codex/gpt-5.5
+model: openai-codex/gpt-5.3-codex
 systemPromptMode: replace
 inheritProjectContext: false
 inheritSkills: false
