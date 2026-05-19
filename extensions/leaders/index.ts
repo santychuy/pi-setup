@@ -16,12 +16,7 @@ import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-cod
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import {
-  DEFAULT_BUDGET_POLICY,
-  EXTENSION_TOOL_REGISTRY,
-  MAX_AGENTS_PER_RUN_CAP,
-  MAX_PARALLEL_CAP,
-} from "./src/types.js";
+import { EXTENSION_TOOL_REGISTRY, MAX_AGENTS_PER_RUN_CAP, MAX_PARALLEL_CAP } from "./src/types.js";
 import type {
   LeaderAgentConfig,
   LeaderBudgetPolicy,
@@ -47,6 +42,7 @@ import { validateContractResult, type ContractValidationResult } from "./src/con
 import { discoverLeaderAgents, resolveAgent } from "./src/agents.js";
 import { buildLeaderArgs } from "./src/spawn-builder.js";
 import { resolveLeaderSessionFile } from "./src/session.js";
+import { invalidateBudgetCache, loadBudgetConfig } from "./src/config.js";
 import {
   spawnAsyncLeader,
   readAsyncStatus,
@@ -845,7 +841,7 @@ const leadersExtension = (pi: ExtensionAPI): void => {
       // ── Run action ────────────────────────────────────────
       const task = params.task;
       const tasks = params.tasks as LeaderParallelTaskInput[] | undefined;
-      const budget: LeaderBudgetPolicy = params.budget ?? DEFAULT_BUDGET_POLICY;
+      const budget: LeaderBudgetPolicy = params.budget ?? loadBudgetConfig(ctx.cwd);
       const contract: LeaderDelegationContract | undefined = params.contract;
 
       if (!isDepthAllowed(budget)) {
@@ -1149,6 +1145,7 @@ const leadersExtension = (pi: ExtensionAPI): void => {
       asyncPollTimer = null;
     }
     cleanupOldAsyncRuns();
+    invalidateBudgetCache();
     tracker.clear();
     deliveredImmediateHandoffs.clear();
 
