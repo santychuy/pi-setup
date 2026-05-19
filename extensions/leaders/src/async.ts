@@ -24,6 +24,15 @@ import { resolveLeaderSessionFile } from "./session.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+export type LeaderAsyncHandoffState = "none" | "pending" | "delivered" | "failed";
+export type LeaderAsyncHandoffMode = "immediate" | "queued" | "disabled";
+
+export interface LeaderHandoffConfig {
+  mode?: LeaderAsyncHandoffMode | "auto";
+  maxAttempts?: number;
+  backoffMs?: number;
+}
+
 export interface LeaderAsyncRun {
   id: string;
   agent: string;
@@ -38,6 +47,28 @@ export interface LeaderAsyncRun {
   sessionDir: string;
   sessionFile?: string;
   cleanupSessionFile?: boolean;
+  handoffState?: LeaderAsyncHandoffState;
+  handoffMode?: LeaderAsyncHandoffMode;
+  handoffAttempts?: number;
+  handoffMaxAttempts?: number;
+  handoffBackoffMs?: number;
+  handoffNextAttemptAt?: string;
+  handoffDeliveredAt?: string;
+  handoffLastError?: string;
+}
+
+export interface LeaderHandoffEnvelope {
+  eventType: "leaders:async-complete";
+  runId: string;
+  agent: string;
+  task: string;
+  status: LeaderAsyncRun["status"];
+  summary: string;
+  usage?: LeaderSingleResult["usage"];
+  artifactPath?: string;
+  startedAt: string;
+  completedAt?: string;
+  handoffMode: Exclude<LeaderAsyncHandoffMode, "disabled">;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -52,6 +83,12 @@ const ensureAsyncDir = (): void => {
 
 const statusPath = (runId: string): string => path.join(ASYNC_DIR, runId, "status.json");
 const logPath = (runId: string): string => path.join(ASYNC_DIR, runId, "output.log");
+const handoffPath = (runId: string): string => path.join(ASYNC_DIR, runId, "handoff.json");
+const handoffQueuePath = (): string => path.join(ASYNC_DIR, "pending-handoffs.jsonl");
+const handoffDeliveredIndexPath = (): string => path.join(ASYNC_DIR, "handoff-delivered.json");
+
+const DEFAULT_HANDOFF_MAX_ATTEMPTS = 5;
+const DEFAULT_HANDOFF_BACKOFF_MS = 30_000;
 
 export const readAsyncStatus = (runId: string): LeaderAsyncRun | null => {
   const file = statusPath(runId);
@@ -260,6 +297,7 @@ export const spawnAsyncLeader = async (
   agent: LeaderAgentConfig,
   mode: LeaderSessionMode,
   _budget?: LeaderBudgetPolicy,
+  handoffConfig: LeaderHandoffConfig = {},
 ): Promise<LeaderAsyncRun> => {
   const runId = randomUUID();
   const runDir = path.join(ASYNC_DIR, runId);
@@ -286,6 +324,14 @@ export const spawnAsyncLeader = async (
     sessionDir: runDir,
     sessionFile: sessionResolution.sessionFile,
     cleanupSessionFile: sessionResolution.cleanupSessionFile,
+    handoffMode: resolveHandoffMode(agent.name, handoffConfig),
+    handoffState: "none",
+    handoffAttempts: 0,
+    handoffMaxAttempts: normalizePositiveInteger(
+      handoffConfig.maxAttempts,
+      DEFAULT_HANDOFF_MAX_ATTEMPTS,
+    ),
+    handoffBackoffMs: normalizePositiveInteger(handoffConfig.backoffMs, DEFAULT_HANDOFF_BACKOFF_MS),
   };
 
   writeAsyncStatus(run);
@@ -340,6 +386,7 @@ export const spawnAsyncLeader = async (
     // Parse the log file for structured result
     const result = parseLogForResult(runId, agent, task, mode, sessionFile, code ?? 0);
     current.result = hideCleanupSessionFile(result, current);
+    prepareHandoff(current);
     const cleanupSucceeded = cleanupAsyncSessionFile(current);
     if (cleanupSucceeded && current.cleanupSessionFile) {
       current.sessionFile = undefined;
@@ -380,6 +427,7 @@ export const spawnAsyncLeader = async (
       stderr: error.message,
     };
     current.result = hideCleanupSessionFile(result, current);
+    prepareHandoff(current);
     const cleanupSucceeded = cleanupAsyncSessionFile(current);
     if (cleanupSucceeded && current.cleanupSessionFile) {
       current.sessionFile = undefined;
@@ -392,6 +440,21 @@ export const spawnAsyncLeader = async (
   proc.unref();
 
   return run;
+};
+
+const prepareHandoff = (run: LeaderAsyncRun): void => {
+  run.handoffMode ??= resolveHandoffMode(run.agent);
+  run.handoffMaxAttempts ??= DEFAULT_HANDOFF_MAX_ATTEMPTS;
+  run.handoffBackoffMs ??= DEFAULT_HANDOFF_BACKOFF_MS;
+  if (run.handoffMode === "disabled") {
+    run.handoffState = "none";
+    return;
+  }
+  run.handoffState = "pending";
+  const envelope = buildHandoffEnvelope(run);
+  if (!envelope) return;
+  persistHandoffEnvelope(run.id, envelope);
+  if (run.handoffMode === "queued") queueHandoffEnvelope(envelope);
 };
 
 // ── Parse Log For Result ───────────────────────────────────────────────────────
@@ -458,6 +521,143 @@ const parseLogForResult = (
 
 // ── Format Async Status ────────────────────────────────────────────────────────
 
+const normalizePositiveInteger = (value: number | undefined, fallback: number): number =>
+  Number.isFinite(value) && value !== undefined && value > 0 ? Math.floor(value) : fallback;
+
+export const resolveHandoffMode = (
+  agent: string,
+  config: Pick<LeaderHandoffConfig, "mode"> = {},
+): LeaderAsyncHandoffMode => {
+  if (config.mode && config.mode !== "auto") return config.mode;
+  const immediateAgents = new Set(["planner", "reviewer", "oracle"]);
+  return immediateAgents.has(agent) ? "immediate" : "queued";
+};
+
+export const buildHandoffEnvelope = (run: LeaderAsyncRun): LeaderHandoffEnvelope | null => {
+  if (!run.result || run.handoffMode === "disabled") return null;
+  const summaryRaw = run.result.finalOutput?.trim() || "(no output)";
+  const summary =
+    summaryRaw.length > 1200 ? `${summaryRaw.slice(0, 1200)}... (truncated)` : summaryRaw;
+
+  return {
+    eventType: "leaders:async-complete",
+    runId: run.id,
+    agent: run.agent,
+    task: run.task,
+    status: run.status,
+    summary,
+    usage: run.result.usage,
+    artifactPath: logPath(run.id),
+    startedAt: run.startedAt,
+    completedAt: run.completedAt,
+    handoffMode: run.handoffMode === "queued" ? "queued" : "immediate",
+  };
+};
+
+export const persistHandoffEnvelope = (runId: string, envelope: LeaderHandoffEnvelope): void => {
+  fs.writeFileSync(handoffPath(runId), JSON.stringify(envelope, null, 2), "utf-8");
+};
+
+const readDeliveredHandoffIndex = (): Record<string, string> => {
+  const file = handoffDeliveredIndexPath();
+  if (!fs.existsSync(file)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf-8")) as Record<string, string>;
+  } catch {
+    return {};
+  }
+};
+
+const writeDeliveredHandoffIndex = (index: Record<string, string>): void => {
+  ensureAsyncDir();
+  fs.writeFileSync(handoffDeliveredIndexPath(), JSON.stringify(index, null, 2), "utf-8");
+};
+
+export const isHandoffDelivered = (runId: string): boolean => runId in readDeliveredHandoffIndex();
+
+export const markHandoffDelivered = (runId: string): void => {
+  const index = readDeliveredHandoffIndex();
+  index[runId] = new Date().toISOString();
+  writeDeliveredHandoffIndex(index);
+  const run = readAsyncStatus(runId);
+  if (run) {
+    run.handoffState = "delivered";
+    run.handoffDeliveredAt = index[runId];
+    run.handoffLastError = undefined;
+    writeAsyncStatus(run);
+  }
+};
+
+export const markHandoffFailedAttempt = (runId: string, error: unknown): void => {
+  const run = readAsyncStatus(runId);
+  if (!run) return;
+  const attempts = (run.handoffAttempts ?? 0) + 1;
+  const maxAttempts = run.handoffMaxAttempts ?? DEFAULT_HANDOFF_MAX_ATTEMPTS;
+  run.handoffAttempts = attempts;
+  run.handoffLastError = error instanceof Error ? error.message : String(error);
+  if (attempts >= maxAttempts) {
+    run.handoffState = "failed";
+    run.handoffNextAttemptAt = undefined;
+  } else {
+    run.handoffState = "pending";
+    const backoffMs = run.handoffBackoffMs ?? DEFAULT_HANDOFF_BACKOFF_MS;
+    run.handoffNextAttemptAt = new Date(Date.now() + backoffMs * 2 ** (attempts - 1)).toISOString();
+  }
+  writeAsyncStatus(run);
+};
+
+export const queueHandoffEnvelope = (envelope: LeaderHandoffEnvelope): void => {
+  const run = readAsyncStatus(envelope.runId);
+  if (isHandoffDelivered(envelope.runId) || run?.handoffState === "failed") return;
+  fs.appendFileSync(handoffQueuePath(), `${JSON.stringify(envelope)}\n`, "utf-8");
+};
+
+export const consumeQueuedHandoffs = (
+  limit = 3,
+): { batch: LeaderHandoffEnvelope[]; remaining: number } => {
+  const file = handoffQueuePath();
+  if (!fs.existsSync(file)) return { batch: [], remaining: 0 };
+
+  const lines = fs
+    .readFileSync(file, "utf-8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const envelopes = lines
+    .map((line) => {
+      try {
+        return JSON.parse(line) as LeaderHandoffEnvelope;
+      } catch {
+        return null;
+      }
+    })
+    .filter((value): value is LeaderHandoffEnvelope => value != null);
+
+  const now = Date.now();
+  const seen = new Set<string>();
+  const eligible = envelopes.filter((envelope) => {
+    if (seen.has(envelope.runId) || isHandoffDelivered(envelope.runId)) return false;
+    seen.add(envelope.runId);
+    const run = readAsyncStatus(envelope.runId);
+    if (run?.handoffState === "failed") return false;
+    if (run?.handoffNextAttemptAt && new Date(run.handoffNextAttemptAt).getTime() > now)
+      return false;
+    return true;
+  });
+  const batch = eligible.slice(0, limit);
+
+  // Do not destructively remove selected entries before delivery succeeds.
+  // Successful deliveries are filtered on the next read via the delivered index;
+  // failed deliveries retain their queue entry for retry/backoff. This favors
+  // at-least-once persistence over losing handoffs on process crashes mid-flush.
+  const remaining = envelopes.filter(
+    (envelope) => !batch.includes(envelope) && !isHandoffDelivered(envelope.runId),
+  ).length;
+
+  return { batch, remaining };
+};
+
 export const formatAsyncStatus = (run: LeaderAsyncRun): string => {
   const statusIcon =
     run.status === "completed"
@@ -476,6 +676,13 @@ export const formatAsyncStatus = (run: LeaderAsyncRun): string => {
   text += `\n    Mode: ${run.mode}`;
   if (hasPendingSessionCleanup(run)) {
     text += `\n    Cleanup: pending temporary session deletion`;
+  }
+  if (run.handoffMode) {
+    text += `\n    Handoff: ${run.handoffMode}/${run.handoffState ?? "none"}`;
+    if (run.handoffAttempts)
+      text += ` (${run.handoffAttempts}/${run.handoffMaxAttempts ?? DEFAULT_HANDOFF_MAX_ATTEMPTS} attempts)`;
+    if (run.handoffNextAttemptAt) text += ` next ${run.handoffNextAttemptAt}`;
+    if (run.handoffLastError) text += ` error: ${run.handoffLastError}`;
   }
 
   if (run.result) {

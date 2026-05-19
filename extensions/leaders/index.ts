@@ -50,6 +50,12 @@ import {
   formatAsyncStatus,
   hasPendingSessionCleanup,
   retryPendingAsyncSessionCleanups,
+  buildHandoffEnvelope,
+  consumeQueuedHandoffs,
+  isHandoffDelivered,
+  markHandoffDelivered,
+  markHandoffFailedAttempt,
+  type LeaderHandoffConfig,
 } from "./src/async.js";
 
 // ── Global Tracker Instance ─────────────────────────────────────────────────
@@ -439,6 +445,10 @@ const leadersExtension = (pi: ExtensionAPI): void => {
   // the widget even during streaming (no active event handler context).
   let latestCtx: ExtensionContext | null = null;
   let asyncPollTimer: ReturnType<typeof setInterval> | null = null;
+  const deliveredImmediateHandoffs = new Set<string>();
+
+  const formatHandoffMessage = (summary: string): string =>
+    `Async leader completion handoff:\n\n${summary}`;
 
   const ensurePolling = () => {
     const needsPolling = tracker
@@ -459,17 +469,55 @@ const leadersExtension = (pi: ExtensionAPI): void => {
   const pollAsyncRuns = () => {
     if (!latestCtx) return;
     const runs = listAsyncRuns();
+
+    for (const run of runs) {
+      if (run.status !== "completed" && run.status !== "failed" && run.status !== "cancelled")
+        continue;
+      const envelope = buildHandoffEnvelope(run);
+      if (!envelope) continue;
+      if (envelope.handoffMode !== "immediate") continue;
+      if (deliveredImmediateHandoffs.has(envelope.runId) || isHandoffDelivered(envelope.runId))
+        continue;
+      if (run.handoffState === "failed") continue;
+      if (run.handoffNextAttemptAt && new Date(run.handoffNextAttemptAt).getTime() > Date.now())
+        continue;
+
+      deliveredImmediateHandoffs.add(envelope.runId);
+      try {
+        pi.sendMessage(
+          {
+            customType: "leader-async-handoff",
+            content: formatHandoffMessage(
+              `ID: ${envelope.runId}\nAgent: ${envelope.agent}\nStatus: ${envelope.status}\nTask: ${envelope.task}\n\n${envelope.summary}`,
+            ),
+            display: true,
+          },
+          { deliverAs: "followUp", triggerTurn: true },
+        );
+        markHandoffDelivered(envelope.runId);
+      } catch (error) {
+        deliveredImmediateHandoffs.delete(envelope.runId);
+        markHandoffFailedAttempt(envelope.runId, error);
+      }
+    }
+
     tracker.syncAsyncRuns(runs);
     const hasActive = tracker
       .getAll()
       .some((e) => e.source === "async" && (e.status === "running" || e.status === "spawning"));
+    const hasPendingImmediateHandoff = runs.some(
+      (run) =>
+        run.handoffMode === "immediate" &&
+        run.handoffState === "pending" &&
+        !isHandoffDelivered(run.id),
+    );
     // Always prune completed async entries on poll
     tracker.pruneCompleted();
     updateWidget(latestCtx);
 
-    // Stop polling when there are no more active async runs and
-    // we previously had active ones (or just started polling).
-    if (!hasActive && asyncPollTimer) {
+    // Stop polling only when neither active processes nor retryable immediate
+    // handoffs remain. Pending handoffs may be waiting on backoff.
+    if (!hasActive && !hasPendingImmediateHandoff && asyncPollTimer) {
       clearInterval(asyncPollTimer);
       asyncPollTimer = null;
     }
@@ -583,6 +631,20 @@ const leadersExtension = (pi: ExtensionAPI): void => {
           description: "Run leader in the background. Returns run ID immediately.",
         }),
       ),
+      handoff: Type.Optional(
+        Type.Object({
+          mode: Type.Optional(
+            Type.Union([
+              Type.Literal("auto"),
+              Type.Literal("immediate"),
+              Type.Literal("queued"),
+              Type.Literal("disabled"),
+            ]),
+          ),
+          maxAttempts: Type.Optional(Type.Number()),
+          backoffMs: Type.Optional(Type.Number()),
+        }),
+      ),
       id: Type.Optional(
         Type.String({
           description: "Run ID for status queries (from a previous async run).",
@@ -635,7 +697,11 @@ const leadersExtension = (pi: ExtensionAPI): void => {
                   ? "⏳"
                   : "⊘";
           const cleanup = hasPendingSessionCleanup(r) ? " · cleanup pending" : "";
-          return `${icon} ${r.id.slice(0, 8)} ${r.agent} ${r.status}${cleanup} — ${r.task.slice(0, 50)}`;
+          const handoff = r.handoffMode
+            ? ` · handoff ${r.handoffMode}/${r.handoffState ?? "none"}`
+            : "";
+          const retry = r.handoffNextAttemptAt ? ` next ${r.handoffNextAttemptAt}` : "";
+          return `${icon} ${r.id.slice(0, 8)} ${r.agent} ${r.status}${cleanup}${handoff}${retry} — ${r.task.slice(0, 50)}`;
         });
         return {
           content: [{ type: "text", text: `Async leader runs:\n\n${lines.join("\n")}` }],
@@ -740,7 +806,14 @@ const leadersExtension = (pi: ExtensionAPI): void => {
         : (task as string);
 
       if (params.async) {
-        const asyncRun = await spawnAsyncLeader(delegatedTask, ctx, agent, mode, budget);
+        const asyncRun = await spawnAsyncLeader(
+          delegatedTask,
+          ctx,
+          agent,
+          mode,
+          budget,
+          params.handoff as LeaderHandoffConfig | undefined,
+        );
 
         // Track the async run in the widget
         tracker.addAsync(asyncRun);
@@ -957,6 +1030,7 @@ const leadersExtension = (pi: ExtensionAPI): void => {
     }
     cleanupOldAsyncRuns();
     tracker.clear();
+    deliveredImmediateHandoffs.clear();
 
     // Only load actively running async runs into the tracker.
     // Completed/failed runs from previous sessions should not appear
@@ -969,8 +1043,13 @@ const leadersExtension = (pi: ExtensionAPI): void => {
 
     // Start polling only if there are still-running async runs
     // that were spawned in a previous session.
-    if (activeRuns.length > 0) {
+    const pendingImmediateHandoffs = existingRuns.some(
+      (r) =>
+        r.handoffMode === "immediate" && r.handoffState === "pending" && !isHandoffDelivered(r.id),
+    );
+    if (activeRuns.length > 0 || pendingImmediateHandoffs) {
       asyncPollTimer = setInterval(pollAsyncRuns, ASYNC_POLL_INTERVAL_MS);
+      pollAsyncRuns();
     }
   });
 
@@ -978,6 +1057,26 @@ const leadersExtension = (pi: ExtensionAPI): void => {
   pi.on("turn_end", async (_event, ctx) => {
     if (process.env[CHILD_ENV] === "1") return;
     latestCtx = ctx;
+
+    const queued = consumeQueuedHandoffs(3);
+    for (const envelope of queued.batch) {
+      try {
+        pi.sendMessage(
+          {
+            customType: "leader-async-handoff",
+            content: formatHandoffMessage(
+              `ID: ${envelope.runId}\nAgent: ${envelope.agent}\nStatus: ${envelope.status}\nTask: ${envelope.task}\n\n${envelope.summary}`,
+            ),
+            display: true,
+          },
+          { deliverAs: "followUp", triggerTurn: false },
+        );
+        markHandoffDelivered(envelope.runId);
+      } catch (error) {
+        markHandoffFailedAttempt(envelope.runId, error);
+      }
+    }
+
     tracker.pruneCompleted();
     updateWidget(ctx);
   });
