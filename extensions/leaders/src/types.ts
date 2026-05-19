@@ -106,6 +106,7 @@ export interface LeaderAgentConfig {
   name: string;
   description: string;
   tools?: string[];
+  extensions?: string[];
   model?: string;
   systemPrompt: string;
   systemPromptMode: "replace" | "append";
@@ -179,6 +180,7 @@ export const DEFAULT_AGENT: LeaderAgentConfig = {
   name: "default",
   description: "General-purpose leader with a focused tool set",
   tools: ["read", "bash", "grep", "find", "ls"],
+  extensions: ["web-access"],
   model: undefined, // inherit parent model
   systemPrompt: "",
   systemPromptMode: "append",
@@ -190,3 +192,7 @@ export const DEFAULT_AGENT: LeaderAgentConfig = {
 };
 
 export const DEFAULT_TOOLS = ["read", "bash", "grep", "find", "ls"] as const;
+
+export const EXTENSION_TOOL_REGISTRY: Record<string, readonly string[]> = {
+  "web-access": ["web_search", "fetch_content"],
+};

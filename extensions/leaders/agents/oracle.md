@@ -2,6 +2,7 @@
 name: oracle
 description: Second opinion — challenge assumptions, catch drift, recommend safest next move
 tools: read, grep, find, ls
+extensions: web-access
 model: opencode-go/glm-5.1
 systemPromptMode: replace
 inheritProjectContext: false

@@ -2,6 +2,7 @@
 name: planner
 description: Create concrete implementation plans from context — read only, no edits
 tools: read, grep, find, ls
+extensions: web-access
 model: openai-codex/gpt-5.5
 systemPromptMode: replace
 inheritProjectContext: false

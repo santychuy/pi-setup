@@ -39,15 +39,22 @@ const loadAgentsFromDir = (
     const { frontmatter, body } = parseFrontmatter<Record<string, string>>(content);
     if (!frontmatter.name || !frontmatter.description) continue;
 
-    const tools = frontmatter.tools
-      ?.split(",")
-      .map((t: string) => t.trim())
-      .filter(Boolean);
+    const parseCsv = (value: string | undefined): string[] | undefined => {
+      const items = value
+        ?.split(",")
+        .map((item: string) => item.trim())
+        .filter(Boolean);
+      return items && items.length > 0 ? items : undefined;
+    };
+
+    const tools = parseCsv(frontmatter.tools);
+    const extensions = parseCsv(frontmatter.extensions);
 
     agents.push({
       name: frontmatter.name,
       description: frontmatter.description,
-      tools: tools && tools.length > 0 ? tools : undefined,
+      tools,
+      extensions,
       model: frontmatter.model,
       systemPrompt: body,
       systemPromptMode: (frontmatter.systemPromptMode as "replace" | "append") ?? "replace",
