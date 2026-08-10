@@ -228,7 +228,12 @@ function publishFooterStatus(ctx: ExtensionContext, snapshot: UsageSnapshot | un
  * This only runs for OAuth-backed openai-codex models. Failures clear the cache so
  * the footer never displays stale limits.
  */
-async function updateUsage(ctx: ExtensionContext): Promise<UsageSnapshot | undefined> {
+async function updateUsage(
+  ctx: ExtensionContext,
+  isCurrent: () => boolean = () => true,
+): Promise<UsageSnapshot | undefined> {
+  if (!isCurrent()) return undefined;
+
   const model = ctx.model;
   if (!model || !isOpenAICodexProvider(model.provider) || !ctx.modelRegistry.isUsingOAuth(model)) {
     usageSnapshot = undefined;
@@ -239,6 +244,8 @@ async function updateUsage(ctx: ExtensionContext): Promise<UsageSnapshot | undef
   }
 
   const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+  if (!isCurrent()) return undefined;
+
   if (!auth.ok || !auth.apiKey) {
     usageSnapshot = undefined;
     publishSnapshot(ctx, undefined);
@@ -257,6 +264,8 @@ async function updateUsage(ctx: ExtensionContext): Promise<UsageSnapshot | undef
 
   try {
     const response = await fetch(USAGE_ENDPOINT, { headers, signal: AbortSignal.timeout(15000) });
+    if (!isCurrent()) return undefined;
+
     if (!response.ok) {
       usageSnapshot = undefined;
       publishSnapshot(ctx, undefined);
@@ -266,6 +275,8 @@ async function updateUsage(ctx: ExtensionContext): Promise<UsageSnapshot | undef
     }
 
     const snapshot = parseUsageSnapshot(await response.json());
+    if (!isCurrent()) return undefined;
+
     usageSnapshot = {
       ...snapshot,
       email: snapshot.email ?? metadata.email,
@@ -276,6 +287,8 @@ async function updateUsage(ctx: ExtensionContext): Promise<UsageSnapshot | undef
     requestRender();
     return usageSnapshot;
   } catch {
+    if (!isCurrent()) return undefined;
+
     usageSnapshot = undefined;
     publishSnapshot(ctx, undefined);
     publishFooterStatus(ctx, undefined);
@@ -418,27 +431,35 @@ function installWidget(ctx: ExtensionContext) {
 /** Register lifecycle hooks and the `/codex-limit` command. */
 export default function (pi: ExtensionAPI): void {
   let inFlight: Promise<UsageSnapshot | undefined> = Promise.resolve(undefined);
+  let sessionGeneration = 0;
 
   /** Serialize refreshes so model changes and agent_end cannot fetch concurrently. */
   const queueUpdate = (ctx: ExtensionContext) => {
-    inFlight = inFlight.catch(() => undefined).then(() => updateUsage(ctx));
+    const generation = sessionGeneration;
+    inFlight = inFlight
+      .catch(() => undefined)
+      .then(() => updateUsage(ctx, () => generation === sessionGeneration));
     return inFlight;
   };
 
   pi.on("session_start", (_event, ctx) => {
+    sessionGeneration += 1;
     installWidget(ctx);
     void queueUpdate(ctx);
   });
 
   pi.on("model_select", (_event, ctx) => {
+    sessionGeneration += 1;
     void queueUpdate(ctx);
   });
 
   pi.on("agent_end", (_event, ctx) => {
+    sessionGeneration += 1;
     void queueUpdate(ctx);
   });
 
   pi.on("session_shutdown", () => {
+    sessionGeneration += 1;
     usageSnapshot = undefined;
     globalThis[GLOBAL_USAGE_KEY] = undefined;
     requestRender = () => {};
