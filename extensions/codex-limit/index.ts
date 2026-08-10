@@ -227,6 +227,9 @@ function publishFooterStatus(ctx: ExtensionContext, snapshot: UsageSnapshot | un
  *
  * This only runs for OAuth-backed openai-codex models. Failures clear the cache so
  * the footer never displays stale limits.
+ *
+ * Check `isCurrent()` after every `await` before accessing `ctx`: session replacement
+ * can happen while an async operation is suspended, invalidating the captured context.
  */
 async function updateUsage(
   ctx: ExtensionContext,
