@@ -1,58 +1,39 @@
 {
   "name": "santychuy-pi-setup",
-  "version": "0.1.0",
-  "description": "My personal Pi coding agent setup — extensions, skills, themes, and prompts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Canonical source for Santychuy’s active Pi coding agent setup",
   "keywords": [
-    "pi-harness",
     "pi-package",
     "pi-setup"
   ],
-  "homepage": "https://github.com/santychuy/pi-setup#readme",
-  "bugs": {
-    "url": "https://github.com/santychuy/pi-setup/issues"
-  },
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/santychuy/pi-setup.git"
   },
-  "workspaces": [
-    "extensions/*"
-  ],
+  "type": "module",
   "scripts": {
-    "lint": "oxlint",
     "format": "oxfmt --write .",
-    "build": "tsdown",
-    "dev": "tsdown --watch",
-    "check": "oxlint && oxfmt --check . && tsc --noEmit",
-    "install:local": "bun scripts/install-local.ts",
-    "link:local": "bun scripts/link-local.ts",
-    "npm:trust": "bun scripts/setup-npm-trust.ts",
-    "release": "semantic-release-npm-workspaces-monorepo",
-    "prepare": "husky"
+    "check": "oxlint && oxfmt --check . && tsc --noEmit && bun run doctor --repo-only",
+    "setup": "bun scripts/setup.ts",
+    "doctor": "bun scripts/doctor.ts"
+  },
+  "dependencies": {
+    "typebox": "1.1.38"
   },
   "devDependencies": {
-    "@commitlint/cli": "20.5.3",
-    "@commitlint/config-conventional": "20.5.3",
-    "@earendil-works/pi-ai": "0.74.0",
-    "@earendil-works/pi-coding-agent": "0.74.0",
-    "@earendil-works/pi-tui": "0.74.0",
-    "@semantic-release/commit-analyzer": "13.0.1",
-    "@semantic-release/git": "10.0.1",
-    "@semantic-release/github": "12.0.6",
-    "@semantic-release/npm": "13.1.5",
-    "@semantic-release/release-notes-generator": "14.1.0",
-    "@types/turndown": "5.0.6",
-    "husky": "9.1.7",
+    "@earendil-works/pi-ai": "0.84.3",
+    "@earendil-works/pi-coding-agent": "0.84.3",
+    "@earendil-works/pi-tui": "0.84.3",
     "oxfmt": "0.48.0",
     "oxlint": "1.63.0",
-    "semantic-release": "25.0.3",
-    "semantic-release-npm-workspaces-monorepo": "3.2.2",
-    "tsdown": "0.22.0",
     "typescript": "5.8.3"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-ai": "0.84.3",
+    "@earendil-works/pi-coding-agent": "0.84.3",
+    "@earendil-works/pi-tui": "0.84.3"
   },
   "pi": {
     "extensions": [
@@ -61,28 +42,8 @@
     "skills": [
       "./skills"
     ],
-    "prompts": [
-      "./prompts"
-    ],
     "themes": [
       "./themes"
     ]
-  },
-  "workspaceRelease": {
-    "changelogCommit": false,
-    "npmRelease": true,
-    "extendsDefaultPlugins": [
-      "@semantic-release/github"
-    ],
-    "perPackageConfig": {
-      "santychuy-pi-setup": {
-        "skip": true
-      }
-    },
-    "release": {
-      "branches": [
-        "main"
-      ]
-    }
   }
 }

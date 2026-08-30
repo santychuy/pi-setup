@@ -1,123 +1,80 @@
-<div align="left">
-  <img src=".github/assets/santychuyISO.png" alt="santychuyISO" width="80" style="vertical-align: middle; margin-bottom: 16px;" />
-</div>
+# Pi Setup
 
-Personal Pi coding agent setup — extensions, skills, themes, and prompts. Fully shareable and installable via `pi install`.
+Canonical source for the Pi coding-agent setup I actively use.
 
-## How Pi Discovers This Repo
+This repository is intentionally small. It tracks maintained extensions, locally-owned skills, one theme, and portable settings. Authentication, sessions, caches, memory, installed packages, and other runtime state stay under `~/.pi/agent` and are never committed.
 
-This repo supports **two** discovery paths:
+## Architecture
 
-1. **Project-local**: When working in this repo, Pi auto-detects everything via the `.pi/` directory (which symlinks to `extensions/`, `skills/`, `themes/`, `prompts/`).
+```text
+pi-setup/              canonical resources and portable configuration
+    │
+    └── local Pi package referenced by ~/.pi/agent/settings.json
 
-2. **As an installed package**: Run `pi install` and Pi reads the `pi` key in `package.json` to discover all content. Works from any directory.
+~/.pi/agent/           runtime settings, credentials, sessions, caches, package installs
+~/.agents/skills/      separately managed global skills, auto-discovered by Pi
+```
+
+## Included
+
+### Extensions
+
+- `auto-session-name`
+- `caveman`
+- `chill`
+- `codex-limit`
+- `custom-footer`
+- `custom-header`
+- `herdr-agent-state`
+- `herdr-context-sidebar`
+- `herdr-pi-sidebar-metadata`
+- `lm-studio`
+- `managed-tasks`
+- `modes`
+
+### Local skills
+
+- `caveman`
+- `mermaid-diagrams`
+- `subagent-authoring`
+
+### Theme
+
+- `santychuy-dark`
+
+External npm and Git Pi packages are pinned in [`config/settings.json`](config/settings.json). Global skills remain in `~/.agents/skills` and are documented in [`config/external-resources.json`](config/external-resources.json).
 
 ## Install
 
-### Global install
+Requirements:
 
-Install once and use from any directory. Writes to `~/.pi/agent/settings.json`:
-
-```bash
-pi install git:https://github.com/santychuy/pi-setup
-```
-
-Or install from a local clone:
+- Pi `0.84.3`
+- Bun
+- A local clone of this repository
 
 ```bash
-git clone https://github.com/santychuy/pi-setup.git
-pi install ./pi-setup
+bun install --frozen-lockfile
+bun run check
+bun run setup --dry-run
+bun run setup --yes
+bun run doctor
 ```
 
-### Project-local install
+`setup` creates a private local backup (`0700` directories and `0600` files) before it changes portable live files. It never accesses `auth.json`, OAuth data, sessions, cache, memory, messages, or history.
 
-Install scoped to a single project. Writes to `.pi/settings.json` so the setup is portable across teams — pi auto-installs missing packages on startup:
+The switch intentionally replaces the complete live `extensions/`, `skills/`, and `themes/` directories after backing them up. Add maintained resources to this repository before deployment; do not keep separate active copies in those live directories.
+
+To roll back, use the backup path printed by `setup`:
 
 ```bash
-pi install -l git:https://github.com/santychuy/pi-setup
+bun run setup --restore ~/.pi/agent/backups/pi-setup-<timestamp>
 ```
 
-Or with a local path:
+## Maintenance
 
-```bash
-pi install -l ./pi-setup
-```
+1. Edit resources in this repository, not under `~/.pi/agent`.
+2. Run `bun run check`.
+3. Run `bun run doctor` to detect live drift.
+4. Update package pins deliberately in `config/settings.json`.
 
-### Copy into a project
-
-Vendor the Pi resources into a specific project under `target-project/.pi/`:
-
-```bash
-git clone https://github.com/santychuy/pi-setup.git
-cd pi-setup
-bun install
-bun run install:local ../target-project
-```
-
-This copies:
-
-```txt
-extensions -> ../target-project/.pi/extensions
-skills     -> ../target-project/.pi/skills
-prompts    -> ../target-project/.pi/prompts
-themes     -> ../target-project/.pi/themes
-```
-
-Use `--force` to replace existing target resources:
-
-```bash
-bun run install:local ../target-project --force
-```
-
-### Link into a project
-
-For personal development, link the resources instead of copying them:
-
-```bash
-bun run link:local ../target-project
-```
-
-This creates symlinks from `target-project/.pi/*` back to this repo. Edits here are reflected immediately in the target project. Use `--force` to replace existing target resources.
-
-Copy mode is better for sharing or vendoring. Link mode is better for your own machines while actively developing this setup.
-
-## Development
-
-```bash
-bun run lint          # Lint with oxlint
-bun run format        # Format with oxfmt
-bun run check         # Lint + format check + type check
-bun run install:local ../target-project  # Copy resources into another project
-bun run link:local ../target-project     # Symlink resources into another project
-```
-
-> Note: `pi install git:...` uses Pi's package installer, which may run npm internally for
-> installed git packages. This repo uses Bun for local development.
-
-## Adding a New Extension
-
-1. Create a directory under `extensions/`:
-
-```
-extensions/my-extension/
-  index.ts
-  package.json
-```
-
-2. In `index.ts`, export a default function that receives `ExtensionAPI`:
-
-```ts
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
-export default function (pi: ExtensionAPI) {
-  pi.registerTool({ ... });
-  pi.registerCommand("my-command", { ... });
-  pi.on("session_start", async (_event, ctx) => {
-    ctx.ui.notify("My extension loaded!", "info");
-  });
-}
-```
-
-## License
-
-MIT
+The previous extension-development monorepo is preserved on branch `legacy/extensions-monorepo` and tag `legacy-v0.1.0`.

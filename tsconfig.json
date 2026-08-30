@@ -7,14 +7,12 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "declaration": true,
-    "isolatedDeclarations": true,
-    "sourceMap": true,
-    "outDir": "./dist",
-    "rootDir": ".",
+    "noEmit": true,
     "resolveJsonModule": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "allowJs": true,
+    "checkJs": false
   },
   "include": ["extensions/**/*.ts", "scripts/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules"]
 }

@@ -1,7 +1,25 @@
 node_modules/
-dist/
 .env
 *.tsbuildinfo
-.pi/
-.agents/
-extensions/web-access/web-search.json
+.DS_Store
+
+# Pi runtime and private state must never be committed.
+auth.json
+sessions/
+cache/
+memory/
+run-history.jsonl
+managed-tasks/
+missions/
+mcp-oauth/
+telegram.json
+trust.json
+locks.json
+npm/
+git/
+bin/
+backups/
+
+# Explicitly retired live resources.
+guardrails.json
+ghostty-sync-*.json

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "globalSkills": {
+    "path": "~/.agents/skills",
+    "loading": "Pi auto-discovery",
+    "ownership": "external; never copied or modified by pi-setup"
+  },
+  "projectLocalSkills": [
+    {
+      "project": "factory-2",
+      "skills": ["maquila"],
+      "loading": "project-local only; not part of the global Pi profile"
+    }
+  ],
+  "excludedRuntimeResources": [
+    "auth.json",
+    "sessions/",
+    "cache/",
+    "memory/",
+    "run-history.jsonl",
+    "managed-tasks/",
+    "missions/",
+    "mcp-oauth/",
+    "telegram.json",
+    "trust.json",
+    "locks.json",
+    "npm/",
+    "git/",
+    "bin/"
+  ]
+}

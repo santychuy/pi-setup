@@ -1,13 +1,3 @@
 {
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "ignorePatterns": [".agents/", ".pi/"],
-  "categories": {
-    "correctness": "error",
-    "suspicious": "warn"
-  },
-  "plugins": ["typescript", "import"],
-  "rules": {
-    "typescript/no-explicit-any": "warn",
-    "no-console": "off"
-  }
+  "ignorePatterns": ["node_modules/**"]
 }
