@@ -6,6 +6,8 @@
 
 Personal setup for [Pi](https://github.com/badlogic/pi-mono): extensions, local skills, theme, and portable settings.
 
+![Pi Setup preview](.github/assets/pi-setup-preview.png)
+
 ## Included
 
 ### Extensions
